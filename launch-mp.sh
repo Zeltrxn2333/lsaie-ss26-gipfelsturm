@@ -31,6 +31,15 @@ GIPFEL_PARTITION=${GIPFEL_PARTITION:-}
 GIPFEL_WORKDIR=${GIPFEL_WORKDIR:-/users/schlag/gipfelsturm}
 GIPFEL_DATA_PREFIX=${GIPFEL_DATA_PREFIX:-/capstor/store/cscs/swissai/infra01/datasets/nvidia/Nemotron-ClimbMix/climbmix_small_megatron/climbmix_small}
 
+################ Memory / precision knobs (opt-in) ################
+# GIPFEL_CPU_OFFLOAD=1   — offload optimizer state to Grace LPDDR (slow; only if GPU OOM and no other levers help)
+# GIPFEL_RECOMPUTE=1     — --recompute-activations (selective recompute in attention)
+# GIPFEL_RECOMPUTE=full  — --recompute-granularity full --recompute-method uniform --recompute-num-layers 1 (full recompute)
+# GIPFEL_FP8=1           — --fp8-format hybrid --fp8-recipe delayed --fp8-param-gather (Hopper-safe)
+GIPFEL_CPU_OFFLOAD=${GIPFEL_CPU_OFFLOAD:-0}
+GIPFEL_RECOMPUTE=${GIPFEL_RECOMPUTE:-0}
+GIPFEL_FP8=${GIPFEL_FP8:-0}
+
 ################ Mode config ################
 case $MODE in
     throughput)
@@ -312,18 +321,34 @@ cat >> "$SCRIPT" << 'DIST_CLOSE'
 )
 DIST_CLOSE
 
-# Memory-saving optimizer args for MP runs (bf16 Adam states + CPU offload).
-# Rationale: with DP=1 (e.g. 32B TP=4 on 1 node, 140B TP=4 PP=4 on 4 nodes)
-# --use-distributed-optimizer cannot shard Adam states, so fp32 m,v alone
-# exceed HBM. bf16 m,v halves that; CPU offload parks states in Grace LPDDR.
+# Memory-saving optimizer args for MP runs.
+# Always: bf16 Adam m,v when MP>1 (halves fp32 Adam states from 65 to 32 GB/rank on 32B).
+# Opt-in via GIPFEL_CPU_OFFLOAD=1: --optimizer-cpu-offload (Grace LPDDR, slow).
+#   Warning: 4 × 32 GB bf16 Adam = 128 GB host RAM per node, plus pinned/param buffers,
+#   plus libs — may exceed the --mem=460000 cgroup budget. Verify before using.
+# Opt-in via GIPFEL_FP8=1: add --fp8-format hybrid + --fp8-param-gather (halves param storage).
+# Opt-in via GIPFEL_RECOMPUTE={1,full}: --recompute-activations or full recompute.
+MEMORY_LINES="    --exp-avg-dtype bf16"$'\n'"    --exp-avg-sq-dtype bf16"
+if [ "$GIPFEL_CPU_OFFLOAD" = "1" ]; then
+    MEMORY_LINES+=$'\n'"    --optimizer-cpu-offload"$'\n'"    --optimizer-offload-fraction 1.0"
+fi
+if [ "$GIPFEL_FP8" = "1" ]; then
+    MEMORY_LINES+=$'\n'"    --fp8-format hybrid"$'\n'"    --fp8-recipe delayed"$'\n'"    --fp8-amax-history-len 16"$'\n'"    --fp8-amax-compute-algo max"$'\n'"    --fp8-param-gather"
+fi
+case "$GIPFEL_RECOMPUTE" in
+    1|selective)
+        MEMORY_LINES+=$'\n'"    --recompute-activations"
+        ;;
+    full)
+        MEMORY_LINES+=$'\n'"    --recompute-granularity full"$'\n'"    --recompute-method uniform"$'\n'"    --recompute-num-layers 1"
+        ;;
+esac
+
 if (( TP * PP > 1 )); then
-    cat >> "$SCRIPT" << 'MEMORY'
+    cat >> "$SCRIPT" << MEMORY
 
 MEMORY_ARGS=(
-    --exp-avg-dtype bf16
-    --exp-avg-sq-dtype bf16
-    --optimizer-cpu-offload
-    --optimizer-offload-fraction 1.0
+$MEMORY_LINES
 )
 MEMORY
 else
