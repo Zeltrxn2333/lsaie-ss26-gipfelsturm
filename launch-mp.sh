@@ -310,11 +310,35 @@ fi
 
 cat >> "$SCRIPT" << 'DIST_CLOSE'
 )
+DIST_CLOSE
+
+# Memory-saving optimizer args for MP runs (bf16 Adam states + CPU offload).
+# Rationale: with DP=1 (e.g. 32B TP=4 on 1 node, 140B TP=4 PP=4 on 4 nodes)
+# --use-distributed-optimizer cannot shard Adam states, so fp32 m,v alone
+# exceed HBM. bf16 m,v halves that; CPU offload parks states in Grace LPDDR.
+if (( TP * PP > 1 )); then
+    cat >> "$SCRIPT" << 'MEMORY'
+
+MEMORY_ARGS=(
+    --exp-avg-dtype bf16
+    --exp-avg-sq-dtype bf16
+    --optimizer-cpu-offload
+    --optimizer-offload-fraction 1.0
+)
+MEMORY
+else
+    cat >> "$SCRIPT" << 'MEMORY'
+
+MEMORY_ARGS=()
+MEMORY
+fi
+
+cat >> "$SCRIPT" << 'LOGGING_HEAD'
 
 LOGGING_ARGS=(
     --log-throughput
     --log-progress
-DIST_CLOSE
+LOGGING_HEAD
 
 cat >> "$SCRIPT" << LOGGING_EXTRA
 ${LOGGING_EXTRA}
@@ -354,6 +378,7 @@ TRAINING_CMD="torchrun ${TORCHRUN_ARGS[@]} $MEGATRON_LM_DIR/pretrain_gpt.py \
     ${INITIALIZATION_ARGS[@]} \
     ${MIXED_PRECISION_ARGS[@]} \
     ${DISTRIBUTED_ARGS[@]} \
+    ${MEMORY_ARGS[@]} \
     ${LOGGING_ARGS[@]} \
     ${TOKENIZER_ARGS[@]} \
     ${DATA_ARGS[@]}"
