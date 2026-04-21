@@ -49,7 +49,7 @@ GIPFEL_MAIN_PARAMS_FP16=${GIPFEL_MAIN_PARAMS_FP16:-0}
 case $MODE in
     throughput)
         TRAINING_STEPS=${3:-50}
-        TIME=00:30:00
+        TIME=${GIPFEL_TIME:-00:30:00}
         EVAL_INTERVAL=$TRAINING_STEPS
         EVAL_ITERS=0
         LR_WARMUP_ITERS=10
@@ -58,7 +58,7 @@ case $MODE in
         ;;
     train)
         TRAINING_STEPS=${3:?Usage: ./launch-mp.sh train <model_size> <steps> [nodes]}
-        TIME=02:30:00
+        TIME=${GIPFEL_TIME:-02:30:00}
         EVAL_INTERVAL=1000
         EVAL_ITERS=10
         LR_WARMUP_ITERS=200
