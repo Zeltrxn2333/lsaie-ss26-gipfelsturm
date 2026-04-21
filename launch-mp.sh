@@ -319,9 +319,8 @@ DISTRIBUTED
 if (( TP > 1 )); then
     echo "    --sequence-parallel" >> "$SCRIPT"
 fi
-if (( PP > 1 )); then
-    echo "    --overlap-p2p-communication" >> "$SCRIPT"
-fi
+# Note: P2P overlap in PP is ON by default in Megatron core_v0.16.1; only
+# --no-overlap-p2p-communication exists (store_false). No positive flag.
 
 cat >> "$SCRIPT" << 'DIST_CLOSE'
 )
