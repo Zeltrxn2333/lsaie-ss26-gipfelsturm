@@ -20,6 +20,17 @@ set -euo pipefail
 MODE=${1:?Usage: ./launch.sh <mode> <model_size> [steps] [nodes]}
 MODEL_SIZE=${2:?Usage: ./launch.sh <mode> <model_size> [steps] [nodes]}
 
+################ Cluster / account parameterization ################
+# Override on non-Clariden clusters, e.g. Daint:
+#   export GIPFEL_ACCOUNT=lp160
+#   export GIPFEL_PARTITION=normal
+#   export GIPFEL_WORKDIR=/users/$USER/gipfelsturm
+# Defaults preserve the original Clariden / infra01 behavior.
+GIPFEL_ACCOUNT=${GIPFEL_ACCOUNT:-infra01}
+GIPFEL_PARTITION=${GIPFEL_PARTITION:-}
+GIPFEL_WORKDIR=${GIPFEL_WORKDIR:-/users/schlag/gipfelsturm}
+GIPFEL_DATA_PREFIX=${GIPFEL_DATA_PREFIX:-/capstor/store/cscs/swissai/infra01/datasets/nvidia/Nemotron-ClimbMix/climbmix_small_megatron/climbmix_small}
+
 ################ Mode config ################
 case $MODE in
     throughput)
@@ -115,7 +126,7 @@ cat > "$SCRIPT" << 'HEADER'
 HEADER
 
 cat >> "$SCRIPT" << SBATCH_DIRECTIVES
-#SBATCH --account=infra01
+#SBATCH --account=${GIPFEL_ACCOUNT}
 #SBATCH --time=${TIME}
 #SBATCH --job-name=${JOB_NAME}
 #SBATCH --output=logs/%x-%j.log
@@ -128,14 +139,21 @@ cat >> "$SCRIPT" << SBATCH_DIRECTIVES
 #SBATCH --no-requeue
 SBATCH_DIRECTIVES
 
-cat >> "$SCRIPT" << 'BODY'
+if [ -n "$GIPFEL_PARTITION" ]; then
+    echo "#SBATCH --partition=${GIPFEL_PARTITION}" >> "$SCRIPT"
+fi
 
-echo "START TIME: $(date)"
+cat >> "$SCRIPT" << BODY_PARAM
+
+echo "START TIME: \$(date)"
 
 ################ Configs ################
-WORKDIR=/users/schlag/gipfelsturm
+WORKDIR=${GIPFEL_WORKDIR}
+DATA_PREFIX=${GIPFEL_DATA_PREFIX}
+BODY_PARAM
+
+cat >> "$SCRIPT" << 'BODY'
 MEGATRON_LM_DIR=$WORKDIR/Megatron-LM
-DATA_PREFIX=/capstor/store/cscs/swissai/infra01/datasets/nvidia/Nemotron-ClimbMix/climbmix_small_megatron/climbmix_small
 DATASET_CACHE_DIR=/iopsstor/scratch/cscs/$USER/gipfelsturm/cache
 BODY
 
