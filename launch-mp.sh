@@ -39,6 +39,11 @@ GIPFEL_DATA_PREFIX=${GIPFEL_DATA_PREFIX:-/capstor/store/cscs/swissai/infra01/dat
 GIPFEL_CPU_OFFLOAD=${GIPFEL_CPU_OFFLOAD:-0}
 GIPFEL_RECOMPUTE=${GIPFEL_RECOMPUTE:-0}
 GIPFEL_FP8=${GIPFEL_FP8:-0}
+# GIPFEL_MAIN_PARAMS_FP16=1 — store main (master) params in fp16 instead of fp32.
+#   Saves 16 GB/rank on 32B TP=4 (which is the difference between OOM and fit
+#   on a single node). Mildly affects numerics at long horizons but fine for a
+#   throughput smoke test.
+GIPFEL_MAIN_PARAMS_FP16=${GIPFEL_MAIN_PARAMS_FP16:-0}
 
 ################ Mode config ################
 case $MODE in
@@ -330,6 +335,9 @@ DIST_CLOSE
 # Opt-in via GIPFEL_FP8=1: add --fp8-format hybrid + --fp8-param-gather (halves param storage).
 # Opt-in via GIPFEL_RECOMPUTE={1,full}: --recompute-activations or full recompute.
 MEMORY_LINES="    --exp-avg-dtype bf16"$'\n'"    --exp-avg-sq-dtype bf16"
+if [ "$GIPFEL_MAIN_PARAMS_FP16" = "1" ]; then
+    MEMORY_LINES+=$'\n'"    --main-params-dtype fp16"
+fi
 if [ "$GIPFEL_CPU_OFFLOAD" = "1" ]; then
     MEMORY_LINES+=$'\n'"    --optimizer-cpu-offload"$'\n'"    --optimizer-offload-fraction 1.0"
 fi
