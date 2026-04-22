@@ -49,6 +49,9 @@ GIPFEL_EXP_AVG_SQ_DTYPE=${GIPFEL_EXP_AVG_SQ_DTYPE:-bf16}
 GIPFEL_NCCL_TUNE=${GIPFEL_NCCL_TUNE:-0}
 # GIPFEL_OPTIMIZER=muon|sgd — override Adam with a lower-state optimizer.
 GIPFEL_OPTIMIZER=${GIPFEL_OPTIMIZER:-adam}
+# GIPFEL_NO_OVERLAP_PG=1 — disable --overlap-param-gather. With DP=1 there is
+#   nothing to overlap anyway, but the double-buffer still eats ~16 GB/rank.
+GIPFEL_NO_OVERLAP_PG=${GIPFEL_NO_OVERLAP_PG:-0}
 
 ################ Mode config ################
 case $MODE in
@@ -325,8 +328,11 @@ DISTRIBUTED_ARGS=(
     --pipeline-model-parallel-size ${PP}
     --use-distributed-optimizer
     --overlap-grad-reduce
-    --overlap-param-gather
 DISTRIBUTED
+
+if [ "$GIPFEL_NO_OVERLAP_PG" != "1" ]; then
+    echo "    --overlap-param-gather" >> "$SCRIPT"
+fi
 
 if (( TP > 1 )); then
     echo "    --sequence-parallel" >> "$SCRIPT"
