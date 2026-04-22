@@ -243,7 +243,7 @@ export PYTHONPATH=$MEGATRON_LM_DIR:$PYTHONPATH
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export TORCH_NCCL_AVOID_RECORD_STREAMS=1
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb=128
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:128
 export TRITON_CACHE_DIR=/iopsstor/scratch/cscs/$USER/gipfelsturm/.triton_cache
 export TORCHINDUCTOR_CACHE_DIR=/iopsstor/scratch/cscs/$USER/gipfelsturm/.inductor_cache
 export OMP_NUM_THREADS=$((SLURM_CPUS_PER_TASK/SLURM_GPUS_PER_NODE))
