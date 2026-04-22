@@ -40,10 +40,15 @@ GIPFEL_CPU_OFFLOAD=${GIPFEL_CPU_OFFLOAD:-0}
 GIPFEL_RECOMPUTE=${GIPFEL_RECOMPUTE:-0}
 GIPFEL_FP8=${GIPFEL_FP8:-0}
 # GIPFEL_MAIN_PARAMS_FP16=1 — store main (master) params in fp16 instead of fp32.
-#   Saves 16 GB/rank on 32B TP=4 (which is the difference between OOM and fit
-#   on a single node). Mildly affects numerics at long horizons but fine for a
-#   throughput smoke test.
 GIPFEL_MAIN_PARAMS_FP16=${GIPFEL_MAIN_PARAMS_FP16:-0}
+# GIPFEL_EXP_AVG_DTYPE / GIPFEL_EXP_AVG_SQ_DTYPE — Adam m/v dtype {fp32|fp16|bf16|fp8}
+#   Default bf16 when MP>1 (saves 16 GB/rank vs fp32). fp8 saves another 16 GB on 32B.
+GIPFEL_EXP_AVG_DTYPE=${GIPFEL_EXP_AVG_DTYPE:-bf16}
+GIPFEL_EXP_AVG_SQ_DTYPE=${GIPFEL_EXP_AVG_SQ_DTYPE:-bf16}
+# GIPFEL_NCCL_TUNE=1 — disable NVLS SHARP and tighten CUDA alloc split (~3-5 GB HBM back).
+GIPFEL_NCCL_TUNE=${GIPFEL_NCCL_TUNE:-0}
+# GIPFEL_OPTIMIZER=muon|sgd — override Adam with a lower-state optimizer.
+GIPFEL_OPTIMIZER=${GIPFEL_OPTIMIZER:-adam}
 
 ################ Mode config ################
 case $MODE in
@@ -192,12 +197,19 @@ fi
 cat >> "$SCRIPT" << BODY_PARAM
 
 echo "START TIME: \$(date)"
-echo "MP config: TP=${TP} PP=${PP} (world=${WORLD_SIZE})"
+echo "MP config: TP=${TP} PP=${PP} (world=${WORLD_SIZE}) adam_m=${GIPFEL_EXP_AVG_DTYPE} adam_v=${GIPFEL_EXP_AVG_SQ_DTYPE} fp8=${GIPFEL_FP8} recompute=${GIPFEL_RECOMPUTE} optimizer=${GIPFEL_OPTIMIZER} nccl_tune=${GIPFEL_NCCL_TUNE}"
 
 ################ Configs ################
 WORKDIR=${GIPFEL_WORKDIR}
 DATA_PREFIX=${GIPFEL_DATA_PREFIX}
 BODY_PARAM
+
+if [ "$GIPFEL_NCCL_TUNE" = "1" ]; then
+    cat >> "$SCRIPT" << 'NCCL_TUNE'
+export NCCL_NVLS_ENABLE=0
+export NCCL_BUFFSIZE=4194304
+NCCL_TUNE
+fi
 
 cat >> "$SCRIPT" << 'BODY'
 MEGATRON_LM_DIR=$WORKDIR/Megatron-LM
@@ -231,7 +243,7 @@ export PYTHONPATH=$MEGATRON_LM_DIR:$PYTHONPATH
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export TORCH_NCCL_AVOID_RECORD_STREAMS=1
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb=128
 export TRITON_CACHE_DIR=/iopsstor/scratch/cscs/$USER/gipfelsturm/.triton_cache
 export TORCHINDUCTOR_CACHE_DIR=/iopsstor/scratch/cscs/$USER/gipfelsturm/.inductor_cache
 export OMP_NUM_THREADS=$((SLURM_CPUS_PER_TASK/SLURM_GPUS_PER_NODE))
@@ -274,7 +286,7 @@ TRAINING_ARGS=(
     --eval-iters ${EVAL_ITERS}
     --cross-entropy-loss-fusion
     --disable-bias-linear
-    --optimizer adam
+    --optimizer ${GIPFEL_OPTIMIZER}
     --dataloader-type single
     --no-check-for-nan-in-loss-and-grad
     --manual-gc
@@ -333,7 +345,7 @@ DIST_CLOSE
 #   plus libs — may exceed the --mem=460000 cgroup budget. Verify before using.
 # Opt-in via GIPFEL_FP8=1: add --fp8-format hybrid + --fp8-param-gather (halves param storage).
 # Opt-in via GIPFEL_RECOMPUTE={1,full}: --recompute-activations or full recompute.
-MEMORY_LINES="    --exp-avg-dtype bf16"$'\n'"    --exp-avg-sq-dtype bf16"
+MEMORY_LINES="    --exp-avg-dtype $GIPFEL_EXP_AVG_DTYPE"$'\n'"    --exp-avg-sq-dtype $GIPFEL_EXP_AVG_SQ_DTYPE"
 if [ "$GIPFEL_MAIN_PARAMS_FP16" = "1" ]; then
     MEMORY_LINES+=$'\n'"    --main-params-dtype fp16"
 fi
