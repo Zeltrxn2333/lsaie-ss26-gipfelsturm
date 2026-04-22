@@ -326,15 +326,15 @@ MIXED_PRECISION_ARGS=(
 DISTRIBUTED_ARGS=(
     --tensor-model-parallel-size ${TP}
     --pipeline-model-parallel-size ${PP}
-    --use-distributed-optimizer
 DISTRIBUTED
 
-# Muon doesn't support overlap-grad-reduce (asserts in Megatron core_v0.16.1).
+# Muon asserts against --use-distributed-optimizer and overlap in core_v0.16.1.
 if [ "$GIPFEL_OPTIMIZER" != "muon" ] && [ "$GIPFEL_OPTIMIZER" != "dist_muon" ]; then
+    echo "    --use-distributed-optimizer" >> "$SCRIPT"
     echo "    --overlap-grad-reduce" >> "$SCRIPT"
-fi
-if [ "$GIPFEL_NO_OVERLAP_PG" != "1" ] && [ "$GIPFEL_OPTIMIZER" != "muon" ] && [ "$GIPFEL_OPTIMIZER" != "dist_muon" ]; then
-    echo "    --overlap-param-gather" >> "$SCRIPT"
+    if [ "$GIPFEL_NO_OVERLAP_PG" != "1" ]; then
+        echo "    --overlap-param-gather" >> "$SCRIPT"
+    fi
 fi
 
 if (( TP > 1 )); then
