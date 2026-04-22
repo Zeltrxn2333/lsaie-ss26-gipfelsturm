@@ -255,11 +255,19 @@ MASTER_PORT=25678
 
 TRANSFORMER_ENGINE_ARGS=(
     --transformer-impl transformer_engine
-    --use-precision-aware-optimizer
-    --main-grads-dtype bf16
 )
 
 SETUP
+
+# Precision-aware-optimizer only works with adam in core_v0.16.1.
+if [ "$GIPFEL_OPTIMIZER" = "adam" ]; then
+    cat >> "$SCRIPT" << 'PAO'
+TRANSFORMER_ENGINE_ARGS+=(
+    --use-precision-aware-optimizer
+    --main-grads-dtype bf16
+)
+PAO
+fi
 
 cat >> "$SCRIPT" << MODEL
 NETWORK_SIZE_ARGS=(
@@ -354,9 +362,13 @@ DIST_CLOSE
 #   plus libs — may exceed the --mem=460000 cgroup budget. Verify before using.
 # Opt-in via GIPFEL_FP8=1: add --fp8-format hybrid + --fp8-param-gather (halves param storage).
 # Opt-in via GIPFEL_RECOMPUTE={1,full}: --recompute-activations or full recompute.
-MEMORY_LINES="    --exp-avg-dtype $GIPFEL_EXP_AVG_DTYPE"$'\n'"    --exp-avg-sq-dtype $GIPFEL_EXP_AVG_SQ_DTYPE"
-if [ "$GIPFEL_MAIN_PARAMS_FP16" = "1" ]; then
-    MEMORY_LINES+=$'\n'"    --main-params-dtype fp16"
+if [ "$GIPFEL_OPTIMIZER" = "adam" ]; then
+    MEMORY_LINES="    --exp-avg-dtype $GIPFEL_EXP_AVG_DTYPE"$'\n'"    --exp-avg-sq-dtype $GIPFEL_EXP_AVG_SQ_DTYPE"
+    if [ "$GIPFEL_MAIN_PARAMS_FP16" = "1" ]; then
+        MEMORY_LINES+=$'\n'"    --main-params-dtype fp16"
+    fi
+else
+    MEMORY_LINES=""
 fi
 if [ "$GIPFEL_CPU_OFFLOAD" = "1" ]; then
     MEMORY_LINES+=$'\n'"    --optimizer-cpu-offload"$'\n'"    --optimizer-offload-fraction 1.0"
