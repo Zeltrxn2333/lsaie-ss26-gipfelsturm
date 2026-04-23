@@ -1,0 +1,98 @@
+# Patch: Add --no-master-weights option to skip fp32 master allocation
+#
+# Problem:
+#   With --use-precision-aware-optimizer, TE FusedAdam allocates a master
+#   weight tensor per-parameter (either fp32, fp16, or int16 remainder
+#   depending on config). On 32B Qwen TP=4 DP=1 single-node, the
+#   compute-params-plus-master footprint is 32 GB/rank regardless of master
+#   dtype (bf16 compute + int16 remainder has the same byte count as bf16
+#   compute + fp16 master), which pushes total per-rank usage above the 95 GB
+#   HBM ceiling at optimizer init. See
+#   patches/README-32B-single-node-brainstorm.md for the full analysis.
+#
+# What this patch does:
+#   1. Adds a new OptimizerConfig field `no_master_weights: bool = False`.
+#   2. Adds a CLI flag `--no-master-weights` in megatron/training/arguments.py.
+#   3. In megatron/core/optimizer/__init__.py, passes `master_weights=False`
+#      and skips `store_param_remainders` to TE FusedAdam when the flag is set.
+#
+#   Trade-off: Adam updates run in bf16 precision without an fp32 master copy.
+#   Acceptable for short throughput benchmarks and model-up validation;
+#   may impact convergence for long training runs (SOTA recipes keep fp32).
+#
+# How to use:
+#   Pass --no-master-weights alongside --use-precision-aware-optimizer and
+#   --bf16. Best combined with --exp-avg-dtype bf16 --exp-avg-sq-dtype bf16
+#   (or fp8) for maximum memory savings.
+#
+# Where in the code:
+#   - megatron/core/optimizer/optimizer_config.py: new dataclass field.
+#   - megatron/training/arguments.py: new --no-master-weights CLI flag,
+#     registered in the same group as --use-precision-aware-optimizer.
+#   - megatron/core/optimizer/__init__.py,
+#     _get_megatron_optimizer_based_on_param_groups(): respects the flag when
+#     building TE FusedAdam kwargs.
+#
+# How to fix if this patch breaks on a future Megatron version:
+#   Search for `master_weights` in megatron/core/optimizer/__init__.py inside
+#   the adam branch. Update the `master_weights` kwarg and the
+#   `store_param_remainders` conditional to respect `config.no_master_weights`.
+#   Verify the CLI flag is still registered in arguments.py near
+#   `--use-precision-aware-optimizer`.
+#
+# Applied to: Megatron-LM core_v0.16.1
+#
+diff --git a/megatron/core/optimizer/__init__.py b/megatron/core/optimizer/__init__.py
+index 11aa6c495..de4d0b622 100644
+--- a/megatron/core/optimizer/__init__.py
++++ b/megatron/core/optimizer/__init__.py
+@@ -377,13 +377,13 @@ def _get_megatron_optimizer_based_on_param_groups(
+                 if config.use_precision_aware_optimizer_no_fp8_or_ds_fp8:
+                     kwargs.update(
+                         {
+-                            "master_weights": True,
++                            "master_weights": not config.no_master_weights,
+                             "use_decoupled_grad": True,
+                             "master_weight_dtype": config.main_params_dtype,
+                         }
+                     )
+ 
+-                if is_te_min_version("2.1.0.dev0"):
++                if is_te_min_version("2.1.0.dev0") and not config.no_master_weights:
+                     kwargs.update({"store_param_remainders": config.store_param_remainders})
+ 
+             optimizer = adam_cls(**kwargs)
+diff --git a/megatron/core/optimizer/optimizer_config.py b/megatron/core/optimizer/optimizer_config.py
+index 2d3e3ca08..6b474991e 100644
+--- a/megatron/core/optimizer/optimizer_config.py
++++ b/megatron/core/optimizer/optimizer_config.py
+@@ -194,6 +194,11 @@ class OptimizerConfig:
+         16 bits shared with the BF16 parameters. This lowers GPU memory usage. Defaults to True.
+     """
+ 
++    no_master_weights: bool = False
++    """If true, set master_weights=False on TE FusedAdam — skips the per-parameter
++    fp32/fp16/int16 master allocation. Saves ~one param-sized buffer per rank at the cost
++    of bf16 Adam precision. Intended for memory-constrained single-node MP configs."""
++
+     main_grads_dtype: torch.dtype = torch.float32
+     """dtype of main grads when enabling precision-aware-optimizer"""
+ 
+diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
+index 46f3c28b1..d8280b2f9 100644
+--- a/megatron/training/arguments.py
++++ b/megatron/training/arguments.py
+@@ -2841,6 +2841,13 @@ def _add_experimental_args(parser):
+                        help='Use the precision-aware optimizer in TransformerEngine, which allows '
+                        'setting the main params and optimizer states to lower precision, such as '
+                        'fp16, bf16 and fp8.')
++    group.add_argument('--no-master-weights', action='store_true',
++                       dest='no_master_weights',
++                       help='When using --use-precision-aware-optimizer, skip allocation of the '
++                            'fp32/fp16/int16 master weight tensor in TE FusedAdam. Adam updates '
++                            'run directly on bf16 model params. Saves ~one param-sized buffer per '
++                            'rank; loses fp32 master precision. Useful on memory-constrained '
++                            'single-node MP configs where the master + compute params overflow HBM.')
+     group.add_argument('--main-grads-dtype', default='fp32', choices=['fp32', 'bf16'],
+                        help='Dtype of main grads when enabling precision-aware-optimizer')
+     group.add_argument('--main-params-dtype', default='fp32', choices=['fp32', 'fp16'],

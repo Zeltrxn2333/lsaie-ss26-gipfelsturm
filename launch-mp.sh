@@ -56,6 +56,10 @@ GIPFEL_NO_OVERLAP_PG=${GIPFEL_NO_OVERLAP_PG:-0}
 GIPFEL_NO_OVERLAP_GR=${GIPFEL_NO_OVERLAP_GR:-0}
 # GIPFEL_DDP_BUCKET_SIZE — bytes. Default Megatron=40M. Smaller = less NCCL peak.
 GIPFEL_DDP_BUCKET_SIZE=${GIPFEL_DDP_BUCKET_SIZE:-0}
+# GIPFEL_NO_MASTER_WEIGHTS=1 — requires patches/0002-no-master-weights-option.patch.
+#   Skips TE FusedAdam's master weight tensor, saving ~16 GB/rank at cost of
+#   bf16-precision Adam updates (fine for throughput benchmarks).
+GIPFEL_NO_MASTER_WEIGHTS=${GIPFEL_NO_MASTER_WEIGHTS:-0}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
 # GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
@@ -277,6 +281,9 @@ TRANSFORMER_ENGINE_ARGS+=(
     --main-grads-dtype bf16
 )
 PAO
+    if [ "$GIPFEL_NO_MASTER_WEIGHTS" = "1" ]; then
+        echo 'TRANSFORMER_ENGINE_ARGS+=(--no-master-weights)' >> "$SCRIPT"
+    fi
 fi
 
 cat >> "$SCRIPT" << MODEL
