@@ -52,6 +52,10 @@ GIPFEL_OPTIMIZER=${GIPFEL_OPTIMIZER:-adam}
 # GIPFEL_NO_OVERLAP_PG=1 — disable --overlap-param-gather. With DP=1 there is
 #   nothing to overlap anyway, but the double-buffer still eats ~16 GB/rank.
 GIPFEL_NO_OVERLAP_PG=${GIPFEL_NO_OVERLAP_PG:-0}
+# GIPFEL_NO_OVERLAP_GR=1 — disable --overlap-grad-reduce (frees grad double-buffer ~8-16 GB)
+GIPFEL_NO_OVERLAP_GR=${GIPFEL_NO_OVERLAP_GR:-0}
+# GIPFEL_DDP_BUCKET_SIZE — bytes. Default Megatron=40M. Smaller = less NCCL peak.
+GIPFEL_DDP_BUCKET_SIZE=${GIPFEL_DDP_BUCKET_SIZE:-0}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
 # GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
@@ -345,10 +349,15 @@ DISTRIBUTED
 # Muon asserts against --use-distributed-optimizer and overlap in core_v0.16.1.
 if [ "$GIPFEL_OPTIMIZER" != "muon" ] && [ "$GIPFEL_OPTIMIZER" != "dist_muon" ]; then
     echo "    --use-distributed-optimizer" >> "$SCRIPT"
-    echo "    --overlap-grad-reduce" >> "$SCRIPT"
-    if [ "$GIPFEL_NO_OVERLAP_PG" != "1" ]; then
+    if [ "$GIPFEL_NO_OVERLAP_GR" != "1" ]; then
+        echo "    --overlap-grad-reduce" >> "$SCRIPT"
+    fi
+    if [ "$GIPFEL_NO_OVERLAP_PG" != "1" ] && [ "$GIPFEL_NO_OVERLAP_GR" != "1" ]; then
         echo "    --overlap-param-gather" >> "$SCRIPT"
     fi
+fi
+if [ "$GIPFEL_DDP_BUCKET_SIZE" != "0" ]; then
+    echo "    --ddp-bucket-size $GIPFEL_DDP_BUCKET_SIZE" >> "$SCRIPT"
 fi
 
 if (( TP > 1 )); then
