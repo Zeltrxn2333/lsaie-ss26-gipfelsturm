@@ -380,7 +380,14 @@ if [ "$GIPFEL_CPU_OFFLOAD" != "0" ] && [ -n "$GIPFEL_CPU_OFFLOAD" ]; then
     MEMORY_LINES+=$'\n'"    --optimizer-cpu-offload"$'\n'"    --optimizer-offload-fraction ${GIPFEL_CPU_OFFLOAD}"
 fi
 if [ "$GIPFEL_FP8" = "1" ]; then
-    MEMORY_LINES+=$'\n'"    --fp8-format hybrid"$'\n'"    --fp8-recipe delayed"$'\n'"    --fp8-amax-history-len 16"$'\n'"    --fp8-amax-compute-algo max"$'\n'"    --fp8-param-gather"
+    # FP8 compute (hybrid+delayed). Note: --fp8-param-gather would trigger
+    # multi_tensor_adam_fp8_cuda which asserts master_param is fp32, but
+    # precision-aware-optimizer + store_param_remainders stores it as int16.
+    # Gated by GIPFEL_FP8_PARAM_GATHER so default is safe.
+    MEMORY_LINES+=$'\n'"    --fp8-format hybrid"$'\n'"    --fp8-recipe delayed"$'\n'"    --fp8-amax-history-len 16"$'\n'"    --fp8-amax-compute-algo max"
+    if [ "${GIPFEL_FP8_PARAM_GATHER:-0}" = "1" ]; then
+        MEMORY_LINES+=$'\n'"    --fp8-param-gather"
+    fi
 fi
 case "$GIPFEL_RECOMPUTE" in
     1|selective)
