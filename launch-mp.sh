@@ -163,7 +163,7 @@ if (( HIDDEN % TP != 0 )) || (( HEADS % TP != 0 )) || (( KV_HEADS % TP != 0 )); 
 fi
 
 GBS=256
-SEQ_LEN=4096
+SEQ_LEN=${GIPFEL_SEQ_LEN:-4096}
 JOB_NAME="gipfel-${MODE}-${MODEL_SIZE}-tp${TP}pp${PP}-${TRAINING_STEPS}s-${NODES}n"
 
 ################ W&B block ################
