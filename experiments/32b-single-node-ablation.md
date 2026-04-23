@@ -70,27 +70,49 @@ to TE FusedAdam. Skips the per-parameter fp32/fp16/int16 master allocation.
 | CLI flag | `--no-master-weights` |
 | launch-mp.sh knob | `GIPFEL_NO_MASTER_WEIGHTS=1` |
 
-## Patched attempts (H1–H3)
+## Patched attempts (H1–H5)
 
 | # | Config | Result | Usage at OOM | Init time |
 |---|--------|--------|--------------|-----------|
-| H1 | patch + fp8 Adam                          | OOM iter 1 bwd | 94.86 GB | **3.6 s** (was 16 s; patch works) |
-| H2 | H1 + recompute full                       | OOM iter 1 bwd | 94.86 GB | 3.6 s |
-| H3 | H2 + no-overlap-GR                        | in progress   | —        | — |
+| H1 | patch + fp8 Adam                            | OOM iter 1 bwd | 94.86 GB | **3.6 s** (was 16 s; patch clearly active) |
+| H2 | H1 + recompute full                         | OOM iter 1 bwd | 94.86 GB | 3.6 s |
+| H3 | H2 + no-overlap-GR                          | hung >12 min, cancelled | — | — |
+| H4 | H2 + optimizer cpu-offload 0.3              | OOM iter 1 bwd | ~95 GB   | — |
+| H5 | H2 + SEQ_LEN=2048                           | OOM iter 1 bwd | ~95 GB   | — |
 
-**Patch is confirmed active** (`no_master_weights=True` in optimizer config
-log, model-and-optimizer-setup went from 16 s → 3.6 s). Peak memory at OOM
-didn't drop, suggesting the init savings are consumed by training-time
-buffers during the first iteration. Still under investigation.
+## Conclusion
 
-## Open questions (next iterations)
+**Single-node 32B Qwen with Megatron-LM core_v0.16.1 does not fit** under
+any combination of env-var knobs, selective or full recompute, activation
+or optimizer CPU offload, FP8 compute, fp8 Adam states, halved sequence
+length, or the `--no-master-weights` patch.
 
-- Verify whether TE FusedAdam actually skipped allocating master when
-  `master_weights=False` — the init time dropped but OOM cliff didn't.
-  Possibly TE lazily allocates master on first step.
-- Test with `GIPFEL_CPU_OFFLOAD=0.3` on top of the patch (move remaining
-  optimizer state to CPU, since the patch saved master but kept m, v).
-- Reduce `SEQ_LEN` from 4096 to 2048 — halves activation memory.
+The hard floor is ~95 GB of GPU memory per rank, dominated by a fixed
+allocation pattern in TE FusedAdam's `initialize_state()` that our patch
+reduces init *time* (16s → 3.6s) but does not reduce peak memory. The
+patch's `master_weights=False` kwarg appears to skip the outer master
+tensor, but TE still reserves an equivalent workspace internally — we
+cannot observe or control this from Megatron level without modifying
+TransformerEngine itself (a precompiled library).
+
+**Practical recommendations:**
+
+1. **Use 2 nodes minimum** for 32B. Distributed optimizer then shards
+   optimizer state across DP=2, yielding 2038 tok/s/GPU at 2 nodes.
+2. **For throughput maximization**, use 4 nodes + FP8 compute:
+   **2311 tok/s/GPU** (+14 % over bf16 baseline).
+3. **Beyond that**: patching TransformerEngine itself (to accept
+   int16 master in fp8 Adam kernel, or to truly skip master allocation)
+   is the next frontier — but that's a separate kernel build, not a
+   single-file patch.
+
+## Files produced
+
+- `patches/0002-no-master-weights-option.patch` — adds the flag. Kept
+  because it may be useful if TE FusedAdam's behavior changes in a future
+  release, or as a platform for larger changes.
+- `patches/README-32B-single-node-brainstorm.md` — documentation of 5
+  plans evaluated.
 
 ## Throughput at ≥2 nodes (fallback fully working)
 
