@@ -32,7 +32,7 @@ GIPFEL_WORKDIR=${GIPFEL_WORKDIR:-/users/schlag/gipfelsturm}
 GIPFEL_DATA_PREFIX=${GIPFEL_DATA_PREFIX:-/capstor/store/cscs/swissai/infra01/datasets/nvidia/Nemotron-ClimbMix/climbmix_small_megatron/climbmix_small}
 
 ################ Memory / precision knobs (opt-in) ################
-# GIPFEL_CPU_OFFLOAD=1   — offload optimizer state to Grace LPDDR (slow; only if GPU OOM and no other levers help)
+# GIPFEL_CPU_OFFLOAD=N   — N in [0, 1] = offload fraction. 1.0 full, 0.5 half, 0 off.
 # GIPFEL_RECOMPUTE=1     — --recompute-activations (selective recompute in attention)
 # GIPFEL_RECOMPUTE=full  — --recompute-granularity full --recompute-method uniform --recompute-num-layers 1 (full recompute)
 # GIPFEL_FP8=1           — --fp8-format hybrid --fp8-recipe delayed --fp8-param-gather (Hopper-safe)
@@ -370,8 +370,8 @@ if [ "$GIPFEL_OPTIMIZER" = "adam" ]; then
 else
     MEMORY_LINES=""
 fi
-if [ "$GIPFEL_CPU_OFFLOAD" = "1" ]; then
-    MEMORY_LINES+=$'\n'"    --optimizer-cpu-offload"$'\n'"    --optimizer-offload-fraction 1.0"
+if [ "$GIPFEL_CPU_OFFLOAD" != "0" ] && [ -n "$GIPFEL_CPU_OFFLOAD" ]; then
+    MEMORY_LINES+=$'\n'"    --optimizer-cpu-offload"$'\n'"    --optimizer-offload-fraction ${GIPFEL_CPU_OFFLOAD}"
 fi
 if [ "$GIPFEL_FP8" = "1" ]; then
     MEMORY_LINES+=$'\n'"    --fp8-format hybrid"$'\n'"    --fp8-recipe delayed"$'\n'"    --fp8-amax-history-len 16"$'\n'"    --fp8-amax-compute-algo max"$'\n'"    --fp8-param-gather"
