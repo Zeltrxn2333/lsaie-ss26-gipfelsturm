@@ -143,6 +143,7 @@ Measured at SEQ_LEN=4096, GBS=256, MBS=1, TP=4, PP=1, 20 steps, iters 5-20 mean:
 | F8  | 4     | 4  | + `GIPFEL_FP8=1` (no param-gather) | **2311** | **458** | 28 s | **+14% over bf16** |
 | F4  | 2     | 2  | + `GIPFEL_EXP_AVG_DTYPE=fp8`    | 622  | 122 | 211 s | fp8 Adam HURTS perf 3× |
 | F7b | 2     | 2  | + `GIPFEL_FP8=1`                | OOM @ 95 GB init | — | — | FP8 workspace doesn't fit DP=2 |
+| F10 | 2     | 2  | + `GIPFEL_FP8=1 GIPFEL_NO_OVERLAP_PG=1` | OOM @ init | — | — | Still doesn't fit; need DP≥4 for FP8 |
 
 **Key findings:**
 - **FP8 compute (hybrid recipe, no param-gather) gives a clean +14% throughput** on 4-node 32B. Free win at ≥4 nodes.
