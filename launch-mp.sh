@@ -54,6 +54,10 @@ GIPFEL_OPTIMIZER=${GIPFEL_OPTIMIZER:-adam}
 GIPFEL_NO_OVERLAP_PG=${GIPFEL_NO_OVERLAP_PG:-0}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
+# GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
+#   from --optimizer-cpu-offload). Offloads layer activations to CPU during fwd
+#   and fetches for bwd. Mutually exclusive with recompute.
+GIPFEL_CPU_OFFLOADING_LAYERS=${GIPFEL_CPU_OFFLOADING_LAYERS:-0}
 
 ################ Mode config ################
 case $MODE in
@@ -386,6 +390,9 @@ case "$GIPFEL_RECOMPUTE" in
         MEMORY_LINES+=$'\n'"    --recompute-granularity full"$'\n'"    --recompute-method uniform"$'\n'"    --recompute-num-layers 1"
         ;;
 esac
+if [ "$GIPFEL_CPU_OFFLOADING_LAYERS" != "0" ]; then
+    MEMORY_LINES+=$'\n'"    --cpu-offloading-num-layers $GIPFEL_CPU_OFFLOADING_LAYERS"
+fi
 
 if (( TP * PP > 1 )); then
     cat >> "$SCRIPT" << MEMORY
