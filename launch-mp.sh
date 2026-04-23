@@ -52,6 +52,8 @@ GIPFEL_OPTIMIZER=${GIPFEL_OPTIMIZER:-adam}
 # GIPFEL_NO_OVERLAP_PG=1 — disable --overlap-param-gather. With DP=1 there is
 #   nothing to overlap anyway, but the double-buffer still eats ~16 GB/rank.
 GIPFEL_NO_OVERLAP_PG=${GIPFEL_NO_OVERLAP_PG:-0}
+# GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
+GIPFEL_MEM=${GIPFEL_MEM:-460000}
 
 ################ Mode config ################
 case $MODE in
@@ -189,7 +191,7 @@ cat >> "$SCRIPT" << SBATCH_DIRECTIVES
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=${GPUS_PER_NODE}
 #SBATCH --cpus-per-task=288
-#SBATCH --mem=460000
+#SBATCH --mem=${GIPFEL_MEM}
 #SBATCH --no-requeue
 SBATCH_DIRECTIVES
 
