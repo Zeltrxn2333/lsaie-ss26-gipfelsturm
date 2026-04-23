@@ -124,10 +124,33 @@ TFLOP/s/GPU rises with model size (bigger matmuls, higher arithmetic intensity).
 
 **Pitfalls learned:**
 
-1. **32B TP=4 single-node OOMs** regardless of recompute/FP8 because `--use-precision-aware-optimizer` keeps a fp32 *master* param copy (32.5 GB/rank) that isn't sharded when DP=1. Baseline exceeds 95 GB HBM before activations. Solutions: 2+ nodes (DP≥2 shards via `--use-distributed-optimizer`), or `GIPFEL_MAIN_PARAMS_FP16=1` + `GIPFEL_RECOMPUTE=full` (tight, not verified working here).
-2. **`--overlap-p2p-communication` does NOT exist** as a positive flag in core_v0.16.1; only `--no-overlap-p2p-communication` (store_false, default True). Positive form causes argparse to reject the whole command and kill all ranks after ~65 s. Default P2P overlap is already on.
-3. **`--optimizer-cpu-offload` without a larger `--mem`** triggers host cgroup OOM: 4 ranks × bf16 Adam (32 GB each) = 128 GB plus pinned buffers plus libs exceeds 460 GB cgroup on top of other tenants.
-4. **140B requires ≥8 nodes** under this recipe: TP=4·PP=4=16 GPUs minimum = 4 nodes, but DP=1 at 4-node forces fp32 master params + Adam unsharded = 108 GB/rank > 95 GB HBM. 8 nodes gives DP=2, shards everything 50/50, comfortable fit.
+1. **32B TP=4 single-node does NOT fit** under Megatron core_v0.16.1 with any combination of fp8 Adam, FP8 compute, FP8 param-gather, no-overlap-PG, recompute (selective or full), optimizer CPU offload 0.3–0.7, TE activation offload, or Muon. 14 attempts, all OOM. Root cause: precision-aware distributed optimizer with DP=1 has ~65 GB of state per rank that can't be sharded, plus 10+ GB unavoidable TE/NCCL workspace. Use ≥2 nodes.
+2. **`--overlap-p2p-communication` does NOT exist** as a positive flag in core_v0.16.1; only `--no-overlap-p2p-communication` (store_false, default True). Default P2P overlap is already on.
+3. **`--optimizer-cpu-offload` has subtle host memory pressure**: Megatron's allocation pattern during iterations grows pinned buffers over time, even at offload fraction 0.5. Default `--mem=460000` is too tight for any offload config; raise `GIPFEL_MEM=800000` (Daint has 870 GB per node). Even then, full recompute + CPU offload together can blow host mem mid-iteration.
+4. **`--fp8-param-gather` is INCOMPATIBLE with precision-aware-optimizer** in core_v0.16.1: TE's `multi_tensor_adam_fp8_cuda` kernel asserts master_param is fp32, but `store_param_remainders=True` (default on bf16) stores it as int16. No CLI knob disables remainders. Don't combine these two; keep `GIPFEL_FP8_PARAM_GATHER=0`.
+5. **Muon requires `Emerging Optimizers` package**, not installed in the alps3 image. Unavailable.
+6. **`PYTORCH_CUDA_ALLOC_CONF=...,max_split_size_mb:128` cuts throughput 2.2×** on 2-node 32B (2076 → 940 tok/s/GPU). The cap serializes large-tensor allocations. Use `expandable_segments:True` alone.
+7. **140B requires ≥8 nodes** under this recipe: TP=4·PP=4=16 GPUs = 4 nodes minimum, but DP=1 at 4-node forces unsharded optimizer = OOM. 8 nodes gives DP=2, comfortable fit.
+
+## 32B throughput ablation (2026-04-23)
+
+Measured at SEQ_LEN=4096, GBS=256, MBS=1, TP=4, PP=1, 20 steps, iters 5-20 mean:
+
+| Run | Nodes | DP | Extra knobs | tok/s/GPU | TFLOP/s/GPU | Iter time | Note |
+|-----|-------|----|-----------  |-----------|-------------|-----------|------|
+| F6  | 2     | 2  | bf16 default                    | 2036 | 401 | 64 s | Baseline |
+| F9  | 4     | 4  | bf16 default                    | 2024 | 402 | 32 s | Linear DP scale |
+| F8  | 4     | 4  | + `GIPFEL_FP8=1` (no param-gather) | **2311** | **458** | 28 s | **+14% over bf16** |
+| F4  | 2     | 2  | + `GIPFEL_EXP_AVG_DTYPE=fp8`    | 622  | 122 | 211 s | fp8 Adam HURTS perf 3× |
+| F7b | 2     | 2  | + `GIPFEL_FP8=1`                | OOM @ 95 GB init | — | — | FP8 workspace doesn't fit DP=2 |
+
+**Key findings:**
+- **FP8 compute (hybrid recipe, no param-gather) gives a clean +14% throughput** on 4-node 32B. Free win at ≥4 nodes.
+- **fp8 Adam m/v is a 3× THROUGHPUT REGRESSION** in core_v0.16.1. The fp8 Adam cuda kernel is slow here; stay on bf16.
+- **FP8 compute needs DP≥4** to fit its workspace on top of optimizer state (2-node OOMs even with no-overlap-PG).
+- bf16 per-GPU throughput is DP-invariant: 2n 2036 ≈ 4n 2024, confirming no interconnect bottleneck at these shapes.
+
+**Recipe for maximum 32B throughput on this cluster:** 4 nodes, `GIPFEL_FP8=1`, everything else default. 2311 tok/s/GPU = 458 TFLOP/s/GPU ≈ 22.9% MFU (vs 2000 TFLOP peak GH200 bf16-equivalent; FP8 theoretical peak is 4000 TFLOP so ~11.5% of FP8 peak — still room to push).
 
 ## Failure modes seen, and fixes
 
