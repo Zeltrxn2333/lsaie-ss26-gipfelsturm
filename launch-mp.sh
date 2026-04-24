@@ -60,6 +60,9 @@ GIPFEL_DDP_BUCKET_SIZE=${GIPFEL_DDP_BUCKET_SIZE:-0}
 #   Skips TE FusedAdam's master weight tensor, saving ~16 GB/rank at cost of
 #   bf16-precision Adam updates (fine for throughput benchmarks).
 GIPFEL_NO_MASTER_WEIGHTS=${GIPFEL_NO_MASTER_WEIGHTS:-0}
+# GIPFEL_NUM_LAYERS — override NUM_LAYERS for the selected model size. Useful for
+#   shrinking 32B to a ~28B variant (56 layers) that fits single-node.
+GIPFEL_NUM_LAYERS=${GIPFEL_NUM_LAYERS:-0}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
 # GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
@@ -144,6 +147,11 @@ esac
 NODES=${4:-$DEFAULT_NODES}
 TP=${GIPFEL_TP:-$DEFAULT_TP}
 PP=${GIPFEL_PP:-$DEFAULT_PP}
+
+# Optional layer-count override (e.g. reduce 32B from 64->56 for single-node fit).
+if [ "$GIPFEL_NUM_LAYERS" != "0" ]; then
+    NUM_LAYERS=$GIPFEL_NUM_LAYERS
+fi
 GPUS_PER_NODE=4
 WORLD_SIZE=$((NODES * GPUS_PER_NODE))
 MP_SIZE=$((TP * PP))
