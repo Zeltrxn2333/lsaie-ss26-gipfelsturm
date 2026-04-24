@@ -114,6 +114,30 @@ TransformerEngine itself (a precompiled library).
 - `patches/README-32B-single-node-brainstorm.md` — documentation of 5
   plans evaluated.
 
+## Breakthrough: single-node via layer reduction (Path A, round 2)
+
+After confirming that the 95 GB peak scales non-linearly with layer count,
+tested smaller shapes with full memory-saving stack enabled
+(`GIPFEL_EXP_AVG_DTYPE=fp8 GIPFEL_EXP_AVG_SQ_DTYPE=fp8 GIPFEL_NO_MASTER_WEIGHTS=1 GIPFEL_NO_OVERLAP_PG=1 GIPFEL_RECOMPUTE=full GIPFEL_MEM=800000`).
+All at SEQ_LEN=4096, GBS=256, MBS=1, TP=4, 1 node. Hidden/ffn/heads/kv as
+Qwen 2.5-32B (h=5120, ffn=27648, 40H, 8KV); only NUM_LAYERS changed.
+
+| # Layers | Approx params | 1-node fit? | tok/s/GPU | TFLOP/s/GPU | iter time |
+|----------|---------------|-------------|-----------|-------------|-----------|
+| 40       | ~20B          | ✓ fit       | **2457**  | ~307        | 105 s |
+| 48       | ~24B          | ✓ fit       | **2085**  | ~310        | 125 s |
+| 50       | ~25B          | TBD         | —         | —           | — |
+| 52       | ~26B          | ✗ OOM       | —         | —           | — |
+| 56       | ~28B          | ✗ OOM       | —         | —           | — |
+| 64       | 32B           | ✗ OOM       | —         | —           | — |
+
+**Actionable single-node answer**: **48 layers / ~24B** at **2085 tok/s/GPU, 310 TFLOP/s**.
+This is ~75% of a real 32B but is *an actual 1-node GH200 training benchmark*.
+
+For a true 32B single-node, the blocker is TE/Megatron's workspace peak at ~95
+GB regardless of layer count below some threshold — needs TE rebuild (Path B)
+or Managed Memory (Path C).
+
 ## Throughput at ≥2 nodes (fallback fully working)
 
 | Config | Nodes | tok/s/GPU |
