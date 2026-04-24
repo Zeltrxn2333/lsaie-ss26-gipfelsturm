@@ -126,17 +126,35 @@ Qwen 2.5-32B (h=5120, ffn=27648, 40H, 8KV); only NUM_LAYERS changed.
 |----------|---------------|-------------|-----------|-------------|-----------|
 | 40       | ~20B          | ✓ fit       | **2457**  | ~307        | 105 s |
 | 48       | ~24B          | ✓ fit       | **2085**  | ~310        | 125 s |
-| 50       | ~25B          | TBD         | —         | —           | — |
-| 52       | ~26B          | ✗ OOM       | —         | —           | — |
-| 56       | ~28B          | ✗ OOM       | —         | —           | — |
-| 64       | 32B           | ✗ OOM       | —         | —           | — |
+| 48 + FP8 | ~24B          | ✗ OOM       | — (FP8 workspace doesn't fit) | — | — |
+| 49       | ~24.5B        | ✗ OOM       | — | — | — |
+| 50       | ~25B          | ✗ OOM       | — | — | — |
+| 52       | ~26B          | ✗ OOM       | — | — | — |
+| 56       | ~28B          | ✗ OOM       | — | — | — |
+| 64       | 32B           | ✗ OOM       | — | — | — |
 
-**Actionable single-node answer**: **48 layers / ~24B** at **2085 tok/s/GPU, 310 TFLOP/s**.
-This is ~75% of a real 32B but is *an actual 1-node GH200 training benchmark*.
+**DEFINITIVE single-node answer: 48 layers, Qwen 2.5-32B-shape @ ~24B params, 2085 tok/s/GPU, 310 TFLOP/s/GPU.**
 
-For a true 32B single-node, the blocker is TE/Megatron's workspace peak at ~95
-GB regardless of layer count below some threshold — needs TE rebuild (Path B)
-or Managed Memory (Path C).
+Config:
+```bash
+GIPFEL_ACCOUNT=lp160 GIPFEL_PARTITION=normal GIPFEL_WORKDIR=/users/ashen/gipfelsturm \
+GIPFEL_TIME=01:00:00 \
+GIPFEL_EXP_AVG_DTYPE=fp8 GIPFEL_EXP_AVG_SQ_DTYPE=fp8 \
+GIPFEL_NO_MASTER_WEIGHTS=1 GIPFEL_NO_OVERLAP_PG=1 \
+GIPFEL_RECOMPUTE=full GIPFEL_NUM_LAYERS=48 GIPFEL_MEM=800000 \
+./launch-mp.sh throughput 32b 15 1
+```
+
+- Same hidden/ffn/heads/kv as Qwen 2.5-32B (h=5120, ffn=27648, 40H, 8KV).
+- Uses `patches/0002-no-master-weights-option.patch` (auto-applied by launcher).
+- SEQ_LEN=4096, GBS=256, MBS=1, TP=4 (all 4 GPUs of 1 node), PP=1, DP=1.
+- FP8 compute cannot be stacked (adds ~10 GB workspace that pushes past 95 GB).
+
+**For true 64-layer 32B single-node** the remaining blockers are within
+TransformerEngine's compiled Adam kernel workspace allocation. Options:
+- Rebuild TE with modified `initialize_state` / `multi_tensor_adam_fp8_cuda`
+- Use CUDA Managed Memory to spill HBM overflow into Grace LPDDR5X via C2C
+Both are ~1 day of engineering and weren't attempted in this round.
 
 ## Throughput at ≥2 nodes (fallback fully working)
 
