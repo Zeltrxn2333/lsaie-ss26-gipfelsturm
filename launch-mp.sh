@@ -63,6 +63,10 @@ GIPFEL_NO_MASTER_WEIGHTS=${GIPFEL_NO_MASTER_WEIGHTS:-0}
 # GIPFEL_NUM_LAYERS — override NUM_LAYERS for the selected model size. Useful for
 #   shrinking 32B to a ~28B variant (56 layers) that fits single-node.
 GIPFEL_NUM_LAYERS=${GIPFEL_NUM_LAYERS:-0}
+# GIPFEL_MBS — override the per-model-size default micro-batch-size.
+GIPFEL_MBS=${GIPFEL_MBS:-0}
+# GIPFEL_TP_COMM_OVERLAP=1 — emit --tp-comm-overlap (TE userbuffers TP comm/compute overlap).
+GIPFEL_TP_COMM_OVERLAP=${GIPFEL_TP_COMM_OVERLAP:-0}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
 # GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
@@ -151,6 +155,10 @@ PP=${GIPFEL_PP:-$DEFAULT_PP}
 # Optional layer-count override (e.g. reduce 32B from 64->56 for single-node fit).
 if [ "$GIPFEL_NUM_LAYERS" != "0" ]; then
     NUM_LAYERS=$GIPFEL_NUM_LAYERS
+fi
+# Optional MBS override.
+if [ "$GIPFEL_MBS" != "0" ]; then
+    MBS=$GIPFEL_MBS
 fi
 GPUS_PER_NODE=4
 WORLD_SIZE=$((NODES * GPUS_PER_NODE))
@@ -373,6 +381,9 @@ if [ "$GIPFEL_OPTIMIZER" != "muon" ] && [ "$GIPFEL_OPTIMIZER" != "dist_muon" ]; 
 fi
 if [ "$GIPFEL_DDP_BUCKET_SIZE" != "0" ]; then
     echo "    --ddp-bucket-size $GIPFEL_DDP_BUCKET_SIZE" >> "$SCRIPT"
+fi
+if [ "$GIPFEL_TP_COMM_OVERLAP" = "1" ]; then
+    echo "    --tp-comm-overlap" >> "$SCRIPT"
 fi
 
 if (( TP > 1 )); then
