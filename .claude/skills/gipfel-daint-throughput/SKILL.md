@@ -144,6 +144,65 @@ Measured at SEQ_LEN=4096, GBS=256, MBS=1, TP=4, PP=1, 20 steps, iters 5-20 mean:
 | F4  | 2     | 2  | + `GIPFEL_EXP_AVG_DTYPE=fp8`    | 622  | 122 | 211 s | fp8 Adam HURTS perf 3× |
 | F7b | 2     | 2  | + `GIPFEL_FP8=1`                | OOM @ 95 GB init | — | — | FP8 workspace doesn't fit DP=2 |
 | F10 | 2     | 2  | + `GIPFEL_FP8=1 GIPFEL_NO_OVERLAP_PG=1` | OOM @ init | — | — | Still doesn't fit; need DP≥4 for FP8 |
+| **M2** | **2** | **2** | **+ `GIPFEL_MBS=2`** | **2236** | **442** | 58 s | **+9.7% from arithmetic intensity** |
+| M2_FA3 | 2 | 2 | + MBS=2 + `GIPFEL_USE_FA3=1` (forces `--attention-backend flash` + FA3 venv) | **2253** | **445** | 58 s | +0.8% over M2 (cuDNN was already optimal at head_dim=128) |
+| M2_TPO | 2 | 2 | + MBS=2 + `--tp-comm-overlap` | NCCL/OFI userbuffers init failed | — | — | Skip on Slingshot-11 |
+| M4    | 2 | 2 | + MBS=4                       | OOM iter 2 | — | — | activation memory wall |
+| M4R   | 2 | 2 | + MBS=4 + recompute selective | OOM via NCCL "calloc async" | — | — | still doesn't fit |
+| M4F   | 2 | 2 | + MBS=4 + recompute full      | ~1700 (worse) | — | — | full recompute kills throughput |
+| F8C   | 2 | 2 | + FP8 + no-master + cpu-offload 0.3 + recompute | crashed iter 2 | — | — | doesn't fit cleanly |
+
+## Patches (Megatron source-level changes)
+
+- **`patches/0001-log-tokens-per-sec-to-wandb.patch`** — adds `tokens-per-sec-per-gpu` to log/TB/W&B output.
+- **`patches/0002-no-master-weights-option.patch`** — adds `--no-master-weights` to skip TE FusedAdam's fp32 master allocation. Saves init time but not peak HBM (TE workspace dominates). Useful as platform for further memory work, not as standalone speedup.
+- **No 0003 patch needed for FA3.** TE 2.11 in alps3 already has the FA3 import path. Just install flash-attn-3 to a venv and prepend to PYTHONPATH; pass `--attention-backend flash` to opt out of TE's auto cuDNN choice. The launch-mp.sh `GIPFEL_USE_FA3=1` knob does both.
+
+## FA3 install (one-time, ~1 hour build)
+
+flash-attn-3 wheels not on PyPI. Built from source:
+
+```bash
+cd /iopsstor/scratch/cscs/$USER/build
+git clone --depth=1 https://github.com/Dao-AILab/flash-attention.git
+cd flash-attention/hopper
+# In alps3 container:
+export FLASH_ATTN_CUDA_ARCHS=90a MAX_JOBS=8
+pip install --no-build-isolation --target=/iopsstor/scratch/cscs/$USER/venvs/fa3 .
+# After build, fix package layout (.py files install at venv root, must be in flash_attn_3/):
+cd /iopsstor/scratch/cscs/$USER/venvs/fa3
+mv flash_attn_interface.py flash_attn_config.py flash_attn_3/
+touch flash_attn_3/__init__.py
+# Strip pulled-in deps that conflict with container's torch:
+rm -rf torch torch-*.dist-info functorch torchgen pkg_resources nvidia* networkx* sympy* mpmath* triton* setuptools* jinja2* MarkupSafe* markupsafe* filelock* fsspec* typing_extensions* ninja* packaging* bin _distutils_hack distutils-precedence.pth
+```
+
+Build needs MAX_JOBS=8 (not higher) on a 4-GPU node with `--mem=800000` to avoid host OOM during ~50 .cu file compile. Total walltime ~1 hour.
+
+## Profile (timing-log-level=2) data — 2n 32B baseline
+
+iter 63.6 s, breakdown:
+
+| Phase | Time (ms) | % of iter |
+|-------|-----------|-----------|
+| forward-compute  | 21,640 | 34% |
+| backward-compute | 41,750 | 66% |
+| optimizer (full step) | 119 | 0.2% |
+| all-grads-sync   | 1.5 | <0.01% |
+| params-all-gather | 0.01 | <0.001% |
+
+**Compute is 99.7% of iter time** — communication and optimizer are not bottlenecks. Throughput optimizations must target compute. FA3 only marginally helps because attention is small share of compute (FFN dominates). FP8 compute would be the big win but doesn't fit at 2-node DP=2.
+
+## Recommended max-throughput config for 2-node 32B
+
+```bash
+GIPFEL_ACCOUNT=lp160 GIPFEL_PARTITION=normal \
+GIPFEL_WORKDIR=/users/$USER/gipfelsturm GIPFEL_TIME=00:30:00 \
+GIPFEL_MEM=800000 GIPFEL_MBS=2 GIPFEL_USE_FA3=1 \
+./launch-mp.sh throughput 32b 20 2
+```
+
+Yields **2253 tok/s/GPU, 445 TFLOP/s/GPU** (≈22% MFU on bf16 peak). The +14% headroom on 4-node FP8 (2311 tok/s/GPU) reflects DP=4 fitting FP8 workspace; on 2-node we're constrained by per-rank memory.
 
 **Key findings:**
 - **FP8 compute (hybrid recipe, no param-gather) gives a clean +14% throughput** on 4-node 32B. Free win at ≥4 nodes.
