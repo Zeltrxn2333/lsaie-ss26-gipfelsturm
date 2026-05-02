@@ -254,8 +254,6 @@ fi
 if [ "$GIPFEL_USE_FA3" = "1" ]; then
     cat >> "$SCRIPT" << FA3_EOF
 export PYTHONPATH=/iopsstor/scratch/cscs/\$USER/venvs/fa3:\$PYTHONPATH
-export NVTE_FUSED_ATTN=0
-export NVTE_FLASH_ATTN=1
 FA3_EOF
 fi
 
@@ -402,6 +400,9 @@ if [ "$GIPFEL_TP_COMM_OVERLAP" = "1" ]; then
 fi
 if [ "$GIPFEL_TIMING" != "0" ]; then
     echo "    --timing-log-level $GIPFEL_TIMING" >> "$SCRIPT"
+fi
+if [ "$GIPFEL_USE_FA3" = "1" ]; then
+    echo "    --attention-backend flash" >> "$SCRIPT"
 fi
 
 if (( TP > 1 )); then
