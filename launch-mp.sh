@@ -67,6 +67,8 @@ GIPFEL_NUM_LAYERS=${GIPFEL_NUM_LAYERS:-0}
 GIPFEL_MBS=${GIPFEL_MBS:-0}
 # GIPFEL_TP_COMM_OVERLAP=1 — emit --tp-comm-overlap (TE userbuffers TP comm/compute overlap).
 GIPFEL_TP_COMM_OVERLAP=${GIPFEL_TP_COMM_OVERLAP:-0}
+# GIPFEL_TIMING=2 — emit --timing-log-level 2 + --barrier-with-L1-time for per-phase breakdown
+GIPFEL_TIMING=${GIPFEL_TIMING:-0}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
 # GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
@@ -384,6 +386,10 @@ if [ "$GIPFEL_DDP_BUCKET_SIZE" != "0" ]; then
 fi
 if [ "$GIPFEL_TP_COMM_OVERLAP" = "1" ]; then
     echo "    --tp-comm-overlap" >> "$SCRIPT"
+fi
+if [ "$GIPFEL_TIMING" != "0" ]; then
+    echo "    --timing-log-level $GIPFEL_TIMING" >> "$SCRIPT"
+    echo "    --barrier-with-L1-time" >> "$SCRIPT"
 fi
 
 if (( TP > 1 )); then
