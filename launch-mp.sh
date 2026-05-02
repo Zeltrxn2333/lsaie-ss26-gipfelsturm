@@ -69,6 +69,8 @@ GIPFEL_MBS=${GIPFEL_MBS:-0}
 GIPFEL_TP_COMM_OVERLAP=${GIPFEL_TP_COMM_OVERLAP:-0}
 # GIPFEL_TIMING=2 — emit --timing-log-level 2 + --barrier-with-L1-time for per-phase breakdown
 GIPFEL_TIMING=${GIPFEL_TIMING:-0}
+# GIPFEL_USE_FA3=1 — prepend FA3 venv to PYTHONPATH so TE auto-uses flash-attn-3
+GIPFEL_USE_FA3=${GIPFEL_USE_FA3:-0}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
 # GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
@@ -244,6 +246,13 @@ if [ "$GIPFEL_NCCL_TUNE" = "1" ]; then
 export NCCL_NVLS_ENABLE=0
 export NCCL_BUFFSIZE=4194304
 NCCL_TUNE
+fi
+
+# FA3 venv prepend (when GIPFEL_USE_FA3=1) — TE 2.11 auto-uses flash_attn_3 if present.
+if [ "$GIPFEL_USE_FA3" = "1" ]; then
+    cat >> "$SCRIPT" << FA3_EOF
+export PYTHONPATH=/iopsstor/scratch/cscs/\$USER/venvs/fa3:\$PYTHONPATH
+FA3_EOF
 fi
 
 cat >> "$SCRIPT" << 'BODY'
