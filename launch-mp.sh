@@ -249,9 +249,13 @@ NCCL_TUNE
 fi
 
 # FA3 venv prepend (when GIPFEL_USE_FA3=1) — TE 2.11 auto-uses flash_attn_3 if present.
+# NVTE_FUSED_ATTN=0 NVTE_FLASH_ATTN=1 forces TE flash-attn path (which dispatches to FA3 if installed,
+# else FA2). Otherwise TE's auto heuristic on Hopper prefers cuDNN FusedAttention.
 if [ "$GIPFEL_USE_FA3" = "1" ]; then
     cat >> "$SCRIPT" << FA3_EOF
 export PYTHONPATH=/iopsstor/scratch/cscs/\$USER/venvs/fa3:\$PYTHONPATH
+export NVTE_FUSED_ATTN=0
+export NVTE_FLASH_ATTN=1
 FA3_EOF
 fi
 
