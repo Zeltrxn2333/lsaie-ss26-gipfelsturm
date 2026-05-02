@@ -389,7 +389,6 @@ if [ "$GIPFEL_TP_COMM_OVERLAP" = "1" ]; then
 fi
 if [ "$GIPFEL_TIMING" != "0" ]; then
     echo "    --timing-log-level $GIPFEL_TIMING" >> "$SCRIPT"
-    echo "    --barrier-with-L1-time" >> "$SCRIPT"
 fi
 
 if (( TP > 1 )); then
