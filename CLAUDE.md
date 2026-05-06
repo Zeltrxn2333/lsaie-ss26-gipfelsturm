@@ -71,3 +71,96 @@ To add a patch: make your edits inside `Megatron-LM/`, `git diff > ../patches/NN
 - All model architectures are transformer-style: RoPE, GQA (`--num-query-groups`), SwiGLU, RMSNorm, untied embeddings, no bias on linears, dropout 0.
 - Default optimizer: Adam (β1=0.9, β2=0.95), wd=0.1, clip=1.0, lr=3e-4, constant schedule with short warmup. Precision: bf16 everywhere including main grads (`--main-grads-dtype bf16`), via precision-aware optimizer and Transformer Engine.
 - Logs and generated sbatch scripts land under `./logs/` (gitignored conceptually — don't commit).
+
+---
+
+## Local additions (not in upstream)
+
+The fork adds Challenge-2 model-parallel support, env-var-driven knobs for cross-cluster use, one Megatron patch, and an ablation log. None of these touch upstream-shared files; they live as standalone additions.
+
+### `launch-mp.sh` — model-parallel launcher
+
+Drop-in alternative to `launch.sh`. Same `<mode> <size> [steps] [nodes]` interface, but adds:
+
+- **New sizes**: `32b` (Qwen 2.5-32B exact: 64 layers, h=5120, ffn=27648, 40 heads, 8 kv heads), `140b` (Qwen-style dense extrapolation: 80 layers, h=12288, ffn=32768, 96 heads, 8 kv heads).
+- **Per-tier MP defaults** matching the README Challenge 2 table: 8b → TP=1 PP=1, 32b → TP=4 PP=1, 140b → TP=4 PP=4. Override via `GIPFEL_TP` / `GIPFEL_PP`.
+- **Preflight divisibility checks**: rejects configs where `WORLD_SIZE < TP*PP`, `NUM_LAYERS % PP != 0`, or `HIDDEN/HEADS/KV_HEADS % TP != 0`.
+- **Cross-cluster parameterization**: `GIPFEL_ACCOUNT`, `GIPFEL_PARTITION`, `GIPFEL_WORKDIR`, `GIPFEL_DATA_PREFIX`, `GIPFEL_MEM`, `GIPFEL_TIME` — defaults preserve Clariden / `infra01` / `schlag` behavior.
+- **Memory and precision knobs** (all opt-in, default off): `GIPFEL_MBS`, `GIPFEL_NUM_LAYERS`, `GIPFEL_SEQ_LEN`, `GIPFEL_RECOMPUTE` (`1` selective / `full`), `GIPFEL_FP8` (`hybrid+delayed` recipe), `GIPFEL_FP8_PARAM_GATHER`, `GIPFEL_EXP_AVG_DTYPE`, `GIPFEL_EXP_AVG_SQ_DTYPE`, `GIPFEL_MAIN_PARAMS_FP16`, `GIPFEL_NO_OVERLAP_PG`, `GIPFEL_NO_OVERLAP_GR`, `GIPFEL_DDP_BUCKET_SIZE`, `GIPFEL_TP_COMM_OVERLAP`, `GIPFEL_NCCL_TUNE`, `GIPFEL_CPU_OFFLOAD` (fraction 0..1), `GIPFEL_CPU_OFFLOADING_LAYERS`, `GIPFEL_OPTIMIZER` (adam/sgd/muon/dist_muon), `GIPFEL_TIMING` (1 or 2 for `--timing-log-level`), `GIPFEL_NO_MASTER_WEIGHTS` (requires patch 0002), `GIPFEL_USE_FA3` (requires FA3 venv).
+
+Recipes that have been validated end-to-end on Daint (account `lp160`, partition `normal`):
+
+```bash
+# Best 2-node 32B throughput → 2253 tok/s/GPU, 445 TFLOP/s/GPU
+GIPFEL_ACCOUNT=lp160 GIPFEL_PARTITION=normal \
+GIPFEL_WORKDIR=/users/$USER/gipfelsturm GIPFEL_TIME=00:30:00 \
+GIPFEL_MEM=800000 GIPFEL_MBS=2 GIPFEL_USE_FA3=1 \
+./launch-mp.sh throughput 32b 20 2
+
+# Best 4-node 32B throughput → 2311 tok/s/GPU (+14% via FP8, only fits at DP=4)
+GIPFEL_ACCOUNT=lp160 GIPFEL_PARTITION=normal \
+GIPFEL_WORKDIR=/users/$USER/gipfelsturm GIPFEL_FP8=1 \
+./launch-mp.sh throughput 32b 20 4
+
+# Multi-node 140B tier (8 nodes minimum so DP=2 shards optimizer state)
+GIPFEL_ACCOUNT=lp160 GIPFEL_PARTITION=normal \
+GIPFEL_WORKDIR=/users/$USER/gipfelsturm GIPFEL_TIME=02:00:00 \
+./launch-mp.sh throughput 140b 15 8
+
+# Single-node 32B-shape pretraining (only fits with shrunk layer count + every memory saver)
+GIPFEL_ACCOUNT=lp160 GIPFEL_PARTITION=normal \
+GIPFEL_WORKDIR=/users/$USER/gipfelsturm GIPFEL_TIME=01:00:00 GIPFEL_MEM=800000 \
+GIPFEL_EXP_AVG_DTYPE=fp8 GIPFEL_EXP_AVG_SQ_DTYPE=fp8 \
+GIPFEL_NO_MASTER_WEIGHTS=1 GIPFEL_NO_OVERLAP_PG=1 \
+GIPFEL_RECOMPUTE=full GIPFEL_NUM_LAYERS=48 \
+./launch-mp.sh throughput 32b 15 1
+```
+
+### `patches/0002-no-master-weights-option.patch`
+
+Adds a `--no-master-weights` CLI flag to Megatron core_v0.16.1 that passes `master_weights=False` to TE FusedAdam. Skips per-parameter fp32/fp16/int16 master allocation. Saves ~one param-sized buffer per rank at the cost of bf16-precision Adam updates.
+
+- Triggered by setting `GIPFEL_NO_MASTER_WEIGHTS=1` when calling `launch-mp.sh`.
+- Auto-applied at job start by the same `flock + git apply` block as patch 0001.
+- Useful only on memory-constrained MP configs (e.g., single-node 32B). On 2-node 32B the patch is harmless but does not improve throughput.
+
+### `patches/README-32B-single-node-brainstorm.md`
+
+Documents the five plans evaluated for fitting 32B on a single node. Plan 5 (no-master-weights) is what patch 0002 implements. Read this if you want to extend the memory-reduction work (e.g., rebuild TransformerEngine with smaller workspace, or add CUDA managed-memory spill via NVLink-C2C).
+
+### `experiments/32b-single-node-ablation.md`
+
+Full log of every single-node 32B attempt (19 runs covering env-var combinations, patch attempts, layer reductions). Documents which knobs help, which are no-ops on Daint, and where the per-rank 95 GB HBM ceiling is dominated by TE workspace (not model state).
+
+### Flash-Attention 3 (built from source, not in repo)
+
+The container ships flash-attn 2.7.4 (FA2) but TE 2.11 already imports `flash_attn_3` if present. To get FA3:
+
+```bash
+# One-time, ~1 hour on a Daint compute node
+mkdir -p /iopsstor/scratch/cscs/$USER/{venvs/fa3,build}
+cd /iopsstor/scratch/cscs/$USER/build
+git clone --depth=1 https://github.com/Dao-AILab/flash-attention.git
+cd flash-attention/hopper
+# Inside alps3 container (via srun --environment=alps3):
+export FLASH_ATTN_CUDA_ARCHS=90a MAX_JOBS=8
+pip install --no-build-isolation --target=/iopsstor/scratch/cscs/$USER/venvs/fa3 .
+
+# Post-install fix: setup.py installs .py files at venv root, not inside the package
+cd /iopsstor/scratch/cscs/$USER/venvs/fa3
+mv flash_attn_interface.py flash_attn_config.py flash_attn_3/
+touch flash_attn_3/__init__.py
+
+# Strip the torch + nvidia + … dependencies pip pulled in (they conflict with the container's torch)
+rm -rf torch torch-*.dist-info functorch torchgen pkg_resources nvidia* networkx* sympy* mpmath* triton* setuptools* jinja2* MarkupSafe* markupsafe* filelock* fsspec* typing_extensions* ninja* packaging* bin _distutils_hack distutils-precedence.pth
+```
+
+After this one-time setup, `GIPFEL_USE_FA3=1` in any `launch-mp.sh` invocation prepends the venv to `PYTHONPATH` and adds `--attention-backend flash` so Megatron forces TE to dispatch attention through FA3. On 32B / head_dim=128 the gain is small (~+0.8%) because cuDNN's fused attention is already well-tuned at this shape.
+
+### Profiling
+
+Set `GIPFEL_TIMING=2` to add `--timing-log-level 2` to the Megatron command. Per-iteration timer breakdowns (`forward-compute`, `backward-compute`, `optimizer-inner-step`, `all-grads-sync`, `params-all-gather`, …) show up at every `--log-interval`. On 32B 2-node baseline this revealed compute is 99.7% of iter time; communication is fully hidden by `--overlap-grad-reduce` / `--overlap-param-gather`.
+
+### Megatron-LM submodule note
+
+`launch-mp.sh` reuses the same `flock + git checkout -- . && git apply patches/*.patch` block as `launch.sh`. Both patches (0001, 0002) apply cleanly to the pinned `core_v0.16.1`. Never commit modifications inside `Megatron-LM/`; always go through `patches/`.
