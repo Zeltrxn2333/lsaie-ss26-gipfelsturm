@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=gipfel-infra
-#SBATCH --account=infra01
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -10,7 +9,7 @@
 #SBATCH --output=logs/%x-%j.log
 #SBATCH --error=logs/%x-%j.log
 
-WORKDIR=/users/schlag/gipfelsturm
+WORKDIR=${WORKDIR:-$SLURM_SUBMIT_DIR}
 
 mkdir -p logs
 
