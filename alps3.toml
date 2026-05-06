@@ -1,6 +1,6 @@
 image = "jfrog.svc.cscs.ch/docker-group-csstaff/alps-images/ngc-pytorch:26.01-py3-alps3"
 mounts = ["/capstor:/capstor", "/users:/users", "/iopsstor:/iopsstor"]
-workdir = "/"
+workdir = "/users/schlag"
 writable = true
 
 [env]
