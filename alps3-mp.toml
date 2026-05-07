@@ -1,0 +1,23 @@
+# EDF for launch-mp.sh — user-agnostic variant of alps3.toml.
+#
+# Differences from upstream alps3.toml:
+#   - workdir = "/"  (instead of "/users/schlag", which fails pyxis chdir
+#                     for any non-schlag user)
+#
+# Setup (one-time, on the Daint login node):
+#   cp alps3-mp.toml ~/.edf/alps3-mp.toml
+#
+# launch-mp.sh references this EDF via `--environment=alps3-mp`. The upstream
+# launch.sh still uses `--environment=alps3` so the original Clariden-only
+# workflow keeps working when both EDFs coexist.
+
+image = "jfrog.svc.cscs.ch/docker-group-csstaff/alps-images/ngc-pytorch:26.01-py3-alps3"
+mounts = ["/capstor:/capstor", "/users:/users", "/iopsstor:/iopsstor"]
+workdir = "/"
+writable = true
+
+[env]
+PMIX_MCA_psec = "native"
+
+[annotations]
+com.hooks.cxi.enabled = "false"
