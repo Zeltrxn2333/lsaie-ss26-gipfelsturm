@@ -155,7 +155,15 @@ touch flash_attn_3/__init__.py
 rm -rf torch torch-*.dist-info functorch torchgen pkg_resources nvidia* networkx* sympy* mpmath* triton* setuptools* jinja2* MarkupSafe* markupsafe* filelock* fsspec* typing_extensions* ninja* packaging* bin _distutils_hack distutils-precedence.pth
 ```
 
-After this one-time setup, `GIPFEL_USE_FA3=1` in any `launch-mp.sh` invocation prepends the venv to `PYTHONPATH` and adds `--attention-backend flash` so Megatron forces TE to dispatch attention through FA3. On 32B / head_dim=128 the gain is small (~+0.8%) because cuDNN's fused attention is already well-tuned at this shape.
+After this one-time setup, `GIPFEL_USE_FA3=1` in any `launch-mp.sh` invocation prepends the venv to `PYTHONPATH` and adds `--attention-backend flash` so Megatron forces TE to dispatch attention through FA3. Measured on 2-node 32B (head_dim=128, GQA 8 KV, seq_len=4096, bf16, causal):
+
+| Backend                                              | tok/s/GPU | vs FA2 | vs cuDNN auto |
+|------------------------------------------------------|-----------|--------|---------------|
+| FA2 (`--attention-backend flash`, no FA3 venv)       | 2095      | —      | ~−6%          |
+| cuDNN FusedAttention (`--attention-backend auto`)    | ~2230     | +6%    | —             |
+| FA3 (`--attention-backend flash` + FA3 venv)         | 2190      | +4.6%  | ~−2%          |
+
+So setting `--attention-backend flash` **without** the FA3 venv installed is a regression versus the default `auto` dispatch. The FA3 venv is what makes the `flash` backend worth turning on. The gap to cuDNN is small because cuDNN's fused attention is already well-tuned for head_dim=128 + bf16 + causal on Hopper. See `experiments/fa2-vs-fa3-comparison.md` for the full reproduction recipe and per-iteration numbers (jobs 3382051/3382052).
 
 ### Profiling
 
