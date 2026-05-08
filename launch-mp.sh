@@ -138,16 +138,38 @@ case $MODEL_SIZE in
         NUM_LAYERS=32;  HIDDEN=4096;  FFN=14336;  HEADS=32; KV_HEADS=8
         MBS=2;  DEFAULT_NODES=4; DEFAULT_TP=1; DEFAULT_PP=1
         ;;
+    qwen3-14b)
+        # Real Qwen3-14B: 40 layers, h=5120, ffn=17408, 40 Q heads, 8 KV heads.
+        NUM_LAYERS=40; HIDDEN=5120; FFN=17408; HEADS=40; KV_HEADS=8
+        MBS=1; DEFAULT_NODES=1; DEFAULT_TP=4; DEFAULT_PP=1
+        ;;
+    qwen3-32b)
+        # Real Qwen3-32B: 64 layers, h=5120, ffn=25600, 64 Q heads, 8 KV heads.
+        NUM_LAYERS=64; HIDDEN=5120; FFN=25600; HEADS=64; KV_HEADS=8
+        MBS=1; DEFAULT_NODES=2; DEFAULT_TP=4; DEFAULT_PP=1
+        ;;
     32b)
+        # Qwen 2.5-32B: 64 layers, h=5120, ffn=27648, 40 heads, 8 kv.
         NUM_LAYERS=64;  HIDDEN=5120;  FFN=27648;  HEADS=40; KV_HEADS=8
         MBS=1;  DEFAULT_NODES=1; DEFAULT_TP=4; DEFAULT_PP=1
+        ;;
+    llama3-70b)
+        # Real Llama 3.1-70B: 80 layers, h=8192, ffn=28672, 64 Q heads, 8 KV heads.
+        # 4 nodes natural fit: TP=4 within node, PP=2 across nodes for memory, DP=2.
+        NUM_LAYERS=80; HIDDEN=8192; FFN=28672; HEADS=64; KV_HEADS=8
+        MBS=1; DEFAULT_NODES=4; DEFAULT_TP=4; DEFAULT_PP=2
+        ;;
+    qwen2.5-72b)
+        # Real Qwen 2.5-72B: 80 layers, h=8192, ffn=29568, 64 Q heads, 8 KV heads.
+        NUM_LAYERS=80; HIDDEN=8192; FFN=29568; HEADS=64; KV_HEADS=8
+        MBS=1; DEFAULT_NODES=4; DEFAULT_TP=4; DEFAULT_PP=2
         ;;
     140b)
         NUM_LAYERS=80;  HIDDEN=12288; FFN=32768;  HEADS=96; KV_HEADS=8
         MBS=1;  DEFAULT_NODES=4; DEFAULT_TP=4; DEFAULT_PP=4
         ;;
     *)
-        echo "Unknown model size: $MODEL_SIZE. Choose: 125m|350m|760m|1.5b|3b|8b|32b|140b"
+        echo "Unknown model size: $MODEL_SIZE. Choose: 125m|350m|760m|1.5b|3b|8b|qwen3-14b|qwen3-32b|32b|llama3-70b|qwen2.5-72b|140b"
         exit 1
         ;;
 esac
