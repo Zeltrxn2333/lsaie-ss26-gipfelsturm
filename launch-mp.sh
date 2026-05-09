@@ -113,6 +113,9 @@ esac
 #   80 layers, h=12288, ffn=32768, heads=96, kv=8, head_dim=128.
 #   Satisfies TP=4 and PP=4 divisibility: h/4, ffn/4, heads/4, kv_heads/4, layers/4 all integers.
 #   Total params ~145B (80 × 1.8B/layer + 1.2B embed with GPT-2 vocab).
+NUM_EXPERTS=0   # 0 = dense; MoE cases set this >0
+MOE_TOPK=0
+DEFAULT_EP=1
 case $MODEL_SIZE in
     125m)
         NUM_LAYERS=12;  HIDDEN=768;   FFN=2048;   HEADS=12; KV_HEADS=4
@@ -168,8 +171,22 @@ case $MODEL_SIZE in
         NUM_LAYERS=80;  HIDDEN=12288; FFN=32768;  HEADS=96; KV_HEADS=8
         MBS=1;  DEFAULT_NODES=4; DEFAULT_TP=4; DEFAULT_PP=4
         ;;
+    mixtral-8x7b)
+        # Real Mixtral 8x7B: 32L/h=4096/ffn=14336/32H/8KV + 8 experts top-2.
+        # 47B total / 13B active. Standard MoE, no shared expert.
+        NUM_LAYERS=32; HIDDEN=4096; FFN=14336; HEADS=32; KV_HEADS=8
+        NUM_EXPERTS=8; MOE_TOPK=2
+        MBS=1; DEFAULT_NODES=2; DEFAULT_TP=4; DEFAULT_PP=1; DEFAULT_EP=2
+        ;;
+    mixtral-8x22b)
+        # Real Mixtral 8x22B: 56L/h=6144/ffn=16384/48H/8KV + 8 experts top-2.
+        # 141B total / 39B active. Needs >=8 nodes for stock-default fit.
+        NUM_LAYERS=56; HIDDEN=6144; FFN=16384; HEADS=48; KV_HEADS=8
+        NUM_EXPERTS=8; MOE_TOPK=2
+        MBS=1; DEFAULT_NODES=8; DEFAULT_TP=4; DEFAULT_PP=1; DEFAULT_EP=4
+        ;;
     *)
-        echo "Unknown model size: $MODEL_SIZE. Choose: 125m|350m|760m|1.5b|3b|8b|qwen3-14b|qwen3-32b|32b|llama3-70b|qwen2.5-72b|140b"
+        echo "Unknown model size: $MODEL_SIZE. Choose: 125m|350m|760m|1.5b|3b|8b|qwen3-14b|qwen3-32b|32b|llama3-70b|qwen2.5-72b|140b|mixtral-8x7b|mixtral-8x22b"
         exit 1
         ;;
 esac
@@ -177,6 +194,7 @@ esac
 NODES=${4:-$DEFAULT_NODES}
 TP=${GIPFEL_TP:-$DEFAULT_TP}
 PP=${GIPFEL_PP:-$DEFAULT_PP}
+EP=${GIPFEL_EP:-$DEFAULT_EP}
 
 # Optional layer-count override (e.g. reduce 32B from 64->56 for single-node fit).
 if [ "$GIPFEL_NUM_LAYERS" != "0" ]; then
@@ -202,6 +220,17 @@ fi
 if (( HIDDEN % TP != 0 )) || (( HEADS % TP != 0 )) || (( KV_HEADS % TP != 0 )); then
     echo "ERROR: HIDDEN/HEADS/KV_HEADS must be divisible by TP=$TP (got $HIDDEN/$HEADS/$KV_HEADS)" >&2
     exit 1
+fi
+if (( NUM_EXPERTS > 0 )); then
+    if (( NUM_EXPERTS % EP != 0 )); then
+        echo "ERROR: NUM_EXPERTS=$NUM_EXPERTS not divisible by EP=$EP" >&2
+        exit 1
+    fi
+    DP=$(( WORLD_SIZE / (TP * PP * EP) ))
+    if (( DP < 1 )) || (( WORLD_SIZE != TP * PP * EP * DP )); then
+        echo "ERROR: world=$WORLD_SIZE != TP($TP)*PP($PP)*EP($EP)*DP" >&2
+        exit 1
+    fi
 fi
 
 GBS=256
@@ -430,12 +459,34 @@ fi
 if (( TP > 1 )); then
     echo "    --sequence-parallel" >> "$SCRIPT"
 fi
+if (( NUM_EXPERTS > 0 )); then
+    echo "    --expert-model-parallel-size $EP" >> "$SCRIPT"
+fi
 # Note: P2P overlap in PP is ON by default in Megatron core_v0.16.1; only
 # --no-overlap-p2p-communication exists (store_false). No positive flag.
 
 cat >> "$SCRIPT" << 'DIST_CLOSE'
 )
 DIST_CLOSE
+
+if (( NUM_EXPERTS > 0 )); then
+    cat >> "$SCRIPT" << MOE_ARGS_EOF
+
+MOE_ARGS=(
+    --num-experts ${NUM_EXPERTS}
+    --moe-router-topk ${MOE_TOPK}
+    --moe-router-load-balancing-type aux_loss
+    --moe-aux-loss-coeff 1e-2
+    --moe-grouped-gemm
+    --moe-token-dispatcher-type alltoall
+)
+MOE_ARGS_EOF
+else
+    cat >> "$SCRIPT" << 'MOE_ARGS_EOF'
+
+MOE_ARGS=()
+MOE_ARGS_EOF
+fi
 
 # Memory-saving optimizer args for MP runs.
 # Always: bf16 Adam m,v when MP>1 (halves fp32 Adam states from 65 to 32 GB/rank on 32B).
@@ -537,6 +588,7 @@ TRAINING_CMD="torchrun ${TORCHRUN_ARGS[@]} $MEGATRON_LM_DIR/pretrain_gpt.py \
     ${MIXED_PRECISION_ARGS[@]} \
     ${DISTRIBUTED_ARGS[@]} \
     ${MEMORY_ARGS[@]} \
+    ${MOE_ARGS[@]} \
     ${LOGGING_ARGS[@]} \
     ${TOKENIZER_ARGS[@]} \
     ${DATA_ARGS[@]}"
