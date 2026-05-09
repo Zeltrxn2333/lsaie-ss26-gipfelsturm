@@ -45,8 +45,28 @@ GB/s intra, Slingshot-11 ~93 GB/s inter). Megatron-LM core_v0.16.1.
 | Qwen3-14B 1n TP=1 DP=4 | OOM init | 14B replicated across 1 GPU = 92 GB state, no margin |
 | Qwen 2.5-72B 4n TP=4 PP=2 DP=2 | OOM iter 1 | 63 GB state + 25 GB workspace = 88 GB; cliff |
 | Llama 3.1-70B 4n TP=4 PP=2 DP=2 | OOM iter 14 | Same cliff; small ffn diff lets it survive longer |
-| Mixtral 8x7B 2n TP=4 EP=2 DP=1 | OOM init | DP=1 ⇒ no opt-state sharding ⇒ ~95 GB |
 | Mixtral 8x22B 8n TP=4 EP=4 DP=2 | OOM init | 9.7B params/rank × 10 bytes = 97 GB; needs ≥16 nodes |
+
+### Mixtral 8x7B at 2 nodes — exhaustive MP sweep, all OOM
+
+Confirms **stock-default Mixtral 8x7B does not fit on 2 nodes** at any
+legal parallelism. 47 B params / 8 GPUs = ~6 B per rank; state (weight + grad +
+optim) ≈ 60 GB, activations + TE/grouped-GEMM workspace ≈ 30+ GB → ≥ 90 GB
+peak versus the 95 GB ceiling.
+
+| MP config (2n, world=8) | Status | Notes |
+|-------------------------|--------|-------|
+| TP=8 PP=1 EP=1 DP=1 | OOM init | TP collective crosses Slingshot — bad even if it fit |
+| TP=4 PP=2 EP=1 DP=1 | OOM init | PP cross-node; EP=1 ⇒ all 8 experts replicated |
+| TP=4 PP=1 EP=2 DP=1 (default) | OOM init | DP=1 ⇒ no dist-opt sharding |
+| TP=4 PP=1 EP=1 DP=2 | OOM init | EP=1 wastes the EP axis |
+| TP=2 PP=1 EP=2 DP=2 | OOM init | TP=2 inefficient for h=4096/32H attn |
+| TP=2 PP=1 EP=4 DP=1 | OOM init | DP=1 again |
+| **TP=1 PP=1 EP=8 DP=1** | **1 iter @ 247 TFLOP/s (50% MFU), OOM iter 2** | **closest to fitting**; grouped-GEMM workspace OOMs in backward |
+
+Workarounds (drop "stock default" constraint): `GIPFEL_RECOMPUTE=full`,
+`GIPFEL_EXP_AVG_DTYPE=fp8`, both available via env var, both no longer
+qualify as the "stock baseline". The clean answer is 4 nodes.
 
 ## Architecture specs (real models tested)
 
