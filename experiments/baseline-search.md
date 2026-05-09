@@ -1,150 +1,166 @@
-# Baseline search across real Qwen / Llama / Mixtral models on Daint GH200
+# Baseline Search — Comprehensive Report
 
-Goal: find a "good baseline" — real published model architecture; reasonable
-parallelism for the cluster size (TP locked within a node, PP/EP/DP fill the
-rest sensibly); stock Megatron defaults; **MFU naturally moderate or low so
-optimization work has clear room to demonstrate value**.
+**Goal**: identify a *good* baseline configuration for the LSAIE Challenge-2
+throughput track. "Good" means:
 
-Date: 2026-05-09. Cluster: CSCS Daint GH200 (4 GH200/node, NVLink-C2C 900
-GB/s intra, Slingshot-11 ~93 GB/s inter). Megatron-LM core_v0.16.1.
+1. **Real, published model** (not a synthetic extrapolation).
+2. **Reasonable parallelism** — TP locked within a node (NVLink-C2C),
+   PP across nodes for memory, EP across nodes for MoE expert sharding,
+   DP fills the rest. World size must equal `TP × PP × EP × DP` exactly.
+3. **Stock Megatron defaults** — no `GIPFEL_USE_FA3`, no `GIPFEL_FP8`, no
+   `GIPFEL_NO_MASTER_WEIGHTS`, no `GIPFEL_RECOMPUTE`, no `GIPFEL_EXP_AVG_DTYPE`,
+   etc. Only the unconditional knobs that come with `launch-mp.sh`:
+   `--use-distributed-optimizer`, `--overlap-grad-reduce`,
+   `--overlap-param-gather`, `--sequence-parallel`, bf16 mixed precision.
+4. **Naturally moderate or low MFU** — the baseline should leave clear
+   headroom for the optimization techniques the project demonstrates.
 
-## Method
+Cluster: **CSCS Daint GH200** (4 GH200 / node, NVLink-C2C 900 GB/s intra,
+Slingshot-11 ~93 GB/s inter; 95 GB usable HBM per GPU). Megatron-LM
+core_v0.16.1.
 
-- Stock launch-mp.sh defaults: `--use-distributed-optimizer`,
-  `--overlap-grad-reduce`, `--overlap-param-gather`, `--sequence-parallel`,
-  bf16, MBS per-tier default (=1 for ≥32B, =2 for 8B). No `GIPFEL_USE_FA3`,
-  no `GIPFEL_FP8`, no `GIPFEL_NO_MASTER_WEIGHTS`, no `GIPFEL_RECOMPUTE`.
-- 20-iteration throughput probes (15 for 140B). Mean over iters 5-N as
-  steady-state.
-- MFU = TFLOP/s/GPU (Megatron's `--log-throughput`) ÷ 494 (GH200 bf16 dense
-  peak). For MoE models, Megatron computes FLOPs over the **active**
-  param count (top-K of N experts), so MFU is comparable.
-- MP rule: TP ≤ 4 (single node), PP across nodes for memory, EP across nodes
-  for MoE expert sharding, DP fills the rest. EP must divide num_experts;
-  world = TP×PP×EP×DP must hold exactly.
-- Constraint: ≤ 200B total params (no Llama 3.1-405B / DeepSeek V2 / Qwen3-235B).
+GH200 bf16 dense peak ≈ **494 TFLOP/s/GPU**. MFU = TFLOP/s/GPU ÷ 494.
+For MoE, Megatron's `--log-throughput` counts FLOPs over **active**
+parameters (top-K of N experts), so MFU is comparable across dense and MoE.
 
-## Results
+Constraint per project scope: **total parameters ≤ 200B**. (Excludes
+Llama 3.1-405B, DeepSeek V2-236B, Qwen3-235B-A22B.)
 
-| # | Model | Real | Nodes | TP | PP | EP | DP | MBS | TFLOP/s | **MFU** | n | Job |
-|---|-------|------|-------|----|----|----|----|----|---------|---------|---|-----|
-| 1 | Qwen 2.5-8B    | ✓ | 1 | 1 | 1 | — | 4 | 2 | 495.8 | **100 %** | 16 | 3383408 |
-| 2 | Qwen3-14B      | ✓ | 1 | 4 | 1 | — | 1 | 1 | 339.2 | **68.7 %** | 16 | 3383834 |
-| 3 | Qwen 2.5-32B   | ✓ | 2 | 4 | 1 | — | 2 | 1 | 405.1 | **82.0 %** | 16 | 3383409 |
-| 4 | Qwen3-32B      | ✓ | 2 | 4 | 1 | — | 2 | 1 | 383.9 | **77.7 %** | 16 | 3383835 |
-| 5 | Qwen 2.5-32B   | ✓ | 4 | 4 | 1 | — | 4 | 1 | 396.5 | **80.3 %** | 16 | 3383410 |
-| 6 | Llama 3.1-70B  | ✓ | 4 | 4 | 4 | — | 1 | 1 | 444.2 | **89.9 %** | 16 | 3383848 |
-| 7 | Qwen 2.5-72B   | ✓ | 4 | 4 | 4 | — | 1 | 1 | 437.7 | **88.6 %** | 16 | 3383847 |
-| 8 | **Mixtral 8x7B** | **✓** | **4** | **4** | **1** | **2** | **2** | **1** | **188.8** | **38.2 %** | 16 | **3383851** |
-| 9 | 140B (synth) | ✗ | 8 | 4 | 4 | — | 2 | 1 | 445.1 | 90.1 % | 11 | 3383415 |
+---
 
-### OOM / partial runs (kept for diagnosis)
+## All experiments (chronological, 22 runs)
 
-| Run | Outcome | Why |
-|-----|---------|-----|
-| Qwen3-14B 1n TP=1 DP=4 | OOM init | 14B replicated across 1 GPU = 92 GB state, no margin |
-| Qwen 2.5-72B 4n TP=4 PP=2 DP=2 | OOM iter 1 | 63 GB state + 25 GB workspace = 88 GB; cliff |
-| Llama 3.1-70B 4n TP=4 PP=2 DP=2 | OOM iter 14 | Same cliff; small ffn diff lets it survive longer |
-| Mixtral 8x22B 8n TP=4 EP=4 DP=2 | OOM init | 9.7B params/rank × 10 bytes = 97 GB; needs ≥16 nodes |
+### Round 1 — initial sweep on Qwen 2.5 (existing model cases)
 
-### Mixtral 8x7B at 2 nodes — exhaustive MP sweep, all OOM
+| # | Model | Real | Nodes | TP | PP | EP | DP | MBS | TFLOP/s | MFU | n | Job |
+|---|-------|------|-------|----|----|----|----|----|---------|------|---|-----|
+| 1 | Qwen 2.5-8B   | ✓ | 1 | 1 | 1 | — | 4 | 2 | 495.8 | **100 %** | 16 | 3383408 |
+| 2 | Qwen 2.5-32B  | ✓ | 2 | 4 | 1 | — | 2 | 1 | 405.1 | **82.0 %** | 16 | 3383409 |
+| 3 | Qwen 2.5-32B  | ✓ | 4 | 4 | 1 | — | 4 | 1 | 396.5 | **80.3 %** | 16 | 3383410 |
+| 4 | 140B (synth)  | ✗ | 8 | 4 | 4 | — | 2 | 1 | 445.1 | **90.1 %** | 11 | 3383415 |
 
-Confirms **stock-default Mixtral 8x7B does not fit on 2 nodes** at any
-legal parallelism. 47 B params / 8 GPUs = ~6 B per rank; state (weight + grad +
-optim) ≈ 60 GB, activations + TE/grouped-GEMM workspace ≈ 30+ GB → ≥ 90 GB
-peak versus the 95 GB ceiling.
+### Round 2 — added real Qwen3 + Llama 3 + Qwen 2.5-72B cases to launch-mp.sh
 
-| MP config (2n, world=8) | Status | Notes |
-|-------------------------|--------|-------|
-| TP=8 PP=1 EP=1 DP=1 | OOM init | TP collective crosses Slingshot — bad even if it fit |
-| TP=4 PP=2 EP=1 DP=1 | OOM init | PP cross-node; EP=1 ⇒ all 8 experts replicated |
-| TP=4 PP=1 EP=2 DP=1 (default) | OOM init | DP=1 ⇒ no dist-opt sharding |
-| TP=4 PP=1 EP=1 DP=2 | OOM init | EP=1 wastes the EP axis |
-| TP=2 PP=1 EP=2 DP=2 | OOM init | TP=2 inefficient for h=4096/32H attn |
-| TP=2 PP=1 EP=4 DP=1 | OOM init | DP=1 again |
-| **TP=1 PP=1 EP=8 DP=1** | **1 iter @ 247 TFLOP/s (50% MFU), OOM iter 2** | **closest to fitting**; grouped-GEMM workspace OOMs in backward |
+| # | Model | Real | Nodes | TP | PP | EP | DP | TFLOP/s | MFU | Status |
+|---|-------|------|-------|----|----|----|----|---------|------|--------|
+| 5 | Qwen3-14B     | ✓ | 1 | 4 | 1 | — | 1 | 339.2 | **68.7 %** | ✓ (3383834) |
+| 6 | Qwen3-14B     | ✓ | 1 | 1 | 1 | — | 4 | — | — | OOM init (3383842) — TP=1 doesn't fit |
+| 7 | Qwen3-32B     | ✓ | 2 | 4 | 1 | — | 2 | 383.9 | **77.7 %** | ✓ (3383835) |
+| 8 | Llama 3.1-70B | ✓ | 4 | 4 | 2 | — | 2 | 446.0 | 90.3 % | partial — OOM at iter 14 (3383841) |
+| 9 | Qwen 2.5-72B  | ✓ | 4 | 4 | 2 | — | 2 | — | — | OOM iter 1 (3383837) |
 
-Workarounds (drop "stock default" constraint): `GIPFEL_RECOMPUTE=full`,
-`GIPFEL_EXP_AVG_DTYPE=fp8`, both available via env var, both no longer
-qualify as the "stock baseline". The clean answer is 4 nodes.
+### Round 3 — PP=4 DP=1 fix for the 70B/72B class
 
-## Architecture specs (real models tested)
+The PP=2 DP=2 configurations OOM because TP=4 PP=2 leaves 9 B params/rank,
+where weight + grad + optimizer state (with dist-opt sharding /2) ≈ 63 GB,
+and the remaining 32 GB are eaten by activations + TE/cuBLAS workspace.
+PP=4 DP=1 cuts per-rank weight to 4.5 B params at the cost of giving up
+dist-opt sharding — net: smaller per-rank weight wins, fits in budget.
+PP bubble at num_microbatches = 256 / 4 stages = 0.78 % is negligible.
 
-| Model | Layers | h | ffn (per expert if MoE) | Q heads | KV heads | Num experts × topK | Total params |
-|-------|--------|---|-------------------------|---------|----------|-------------------|--------------|
-| Qwen 2.5-8B   | 32 | 4096 | 14336 | 32 | 8 | dense | 8 B   |
-| Qwen3-14B     | 40 | 5120 | 17408 | 40 | 8 | dense | 14 B  |
-| Qwen 2.5-32B  | 64 | 5120 | 27648 | 40 | 8 | dense | 32 B  |
-| Qwen3-32B     | 64 | 5120 | 25600 | 64 | 8 | dense | 32 B  |
-| Llama 3.1-70B | 80 | 8192 | 28672 | 64 | 8 | dense | 70 B  |
-| Qwen 2.5-72B  | 80 | 8192 | 29568 | 64 | 8 | dense | 72 B  |
-| Mixtral 8x7B  | 32 | 4096 | 14336 | 32 | 8 | **8 × top-2** | 47 B  |
+| # | Model | Real | Nodes | TP | PP | EP | DP | TFLOP/s | MFU | Status |
+|---|-------|------|-------|----|----|----|----|---------|------|--------|
+| 10 | Llama 3.1-70B | ✓ | 4 | 4 | 4 | — | 1 | **444.2** | **89.9 %** | ✓ (3383848) |
+| 11 | Qwen 2.5-72B  | ✓ | 4 | 4 | 4 | — | 1 | **437.7** | **88.6 %** | ✓ (3383847) |
 
-## Observations
+### Round 4 — added MoE wiring + Mixtral cases
 
-1. **MoE drops MFU dramatically.** Mixtral 8x7B at 38 % MFU is **half** the
-   level of dense models with comparable per-rank compute. Causes:
-   - Token dispatcher all-to-all (NVLink + Slingshot for cross-node EP)
-   - Grouped expert GEMM (variable-size GEMMs, less tensor-core efficient
-     than uniform dense GEMMs)
-   - Routing overhead (top-K gating, scatter/gather)
-   - Permutation kernels around expert dispatch
-   This is *exactly* the kind of headroom a baseline needs.
+`launch-mp.sh` extended with:
+- `GIPFEL_EP` env var, per-tier `DEFAULT_EP`
+- `MOE_ARGS` block with Megatron's official Mixtral flags:
+  `--num-experts`, `--moe-router-topk`, `--moe-router-load-balancing-type aux_loss`,
+  `--moe-aux-loss-coeff 1e-2`, `--moe-grouped-gemm`,
+  `--moe-token-dispatcher-type alltoall`, `--expert-model-parallel-size $EP`
+- New cases `mixtral-8x7b` (47 B / 13 B active) and `mixtral-8x22b`
+  (141 B / 39 B active)
 
-2. **Dense models above 14B saturate compute fast.** All of 8B / 32B / 70B /
-   72B / 140B-synth land in the 77-100 % MFU band with stock Megatron defaults
-   on appropriate node counts. There's only ~5-15 pp left to chase, mostly
-   via FP8 compute (validated +14 % on 32B 4n earlier in
-   `experiments/optimization-headroom-2n-32b.md`).
+| # | Model | Real | Nodes | TP | PP | EP | DP | TFLOP/s | MFU | Status |
+|---|-------|------|-------|----|----|----|----|---------|------|--------|
+| 12 | Mixtral 8x7B  | ✓ | 2 | 4 | 1 | 2 | 1 | — | — | OOM init (3383849) |
+| 13 | Mixtral 8x22B | ✓ | 8 | 4 | 1 | 4 | 2 | — | — | OOM init (3383850); needs ≥ 16 nodes |
+| 14 | **Mixtral 8x7B** | ✓ | **4** | 4 | 1 | 2 | 2 | **188.8** | **38.2 %** | ✓ (3383851) |
 
-3. **PP=4 DP=1 actually fits 70B/72B at 4 nodes**, while PP=2 DP=2 OOMs.
-   Counterintuitive at first — DP=2 should let dist-opt shard the
-   optimizer state — but at the 70B class TP=4 PP=2 leaves 9 B params/rank,
-   and weight + grad + opt state already saturate the 95 GB budget before
-   activations. PP=4 DP=1 cuts per-rank weight to 4.5 B params and
-   *accepts* not sharding the optimizer state, giving more headroom for TE
-   workspace + activations. Bubble cost is negligible at
-   num_microbatches = 256.
+### Round 5 — Mixtral 8x7B 2n exhaustive MP sweep (all OOM)
 
-4. **Qwen3-32B is consistently 5 pp lower than Qwen 2.5-32B** at the same MP.
-   Same hidden + layer count, but 64 attention heads vs 40 — head_dim and
-   per-shard head counts shift the attention GEMM partition into smaller,
-   more numerous kernels. Plus ffn is 7 % smaller. Both reduce MFU.
+Goal: confirm whether **any** legal MP fits Mixtral 8x7B on 2 nodes with
+stock defaults. Answer: **no**.
 
-5. **Stock-default 32B 2n / 4n already sit at 80-82 % MFU** — too tight for
-   a "demonstrate optimization" baseline.
+47 B params / 8 GPUs ≈ 5.9 B per rank. Per-rank state (weight + grad +
+optimizer) ≈ 60 GB regardless of how the 8-way split is partitioned across
+TP / PP / EP / DP. Activations + TE workspace + cuBLAS/grouped-GEMM
+scratch add another 30+ GB → all configurations exceed the 95 GB ceiling.
 
-## Recommended baseline
+| # | MP (2n, world=8) | TFLOP/s | MFU | Status | Job |
+|---|------------------|---------|------|--------|-----|
+| 15 | TP=8 PP=1 EP=1 DP=1 | — | — | OOM init (TP cross-node, would also be slow) | 3383859 |
+| 16 | TP=4 PP=2 EP=1 DP=1 | — | — | OOM init (PP cross-node) | 3383860 |
+| 17 | TP=2 PP=1 EP=2 DP=2 | — | — | OOM init | 3383861 |
+| 18 | TP=4 PP=1 EP=1 DP=2 | — | — | OOM init (EP=1 ⇒ 8 experts replicated per rank) | 3383862 |
+| 19 | TP=2 PP=1 EP=4 DP=1 | — | — | OOM init | 3383865 |
+| 20 | **TP=1 PP=1 EP=8 DP=1** | **247** | **50 %** for 1 iter | iter 1 succeeds, iter 2 OOM at grouped_linear backward | 3383866 |
 
-### Primary: **Mixtral 8x7B, 4 nodes, TP=4 PP=1 EP=2 DP=2, MBS=1, stock Megatron defaults**
+### Round 6 — Mixtral 8x7B 2n + GIPFEL_RECOMPUTE=full (still OOM)
 
-| Metric | Value |
-|--------|-------|
-| Real model | Mixtral 8x7B (Mistral AI, 2024) |
+Activation recomputation only saves activation memory (the kept-from-forward
+buffers used by backward), not the optimizer state, weight, or grad. The 60 GB
+per-rank state floor remains.
+
+| # | MP + recompute=full | TFLOP/s | Status | Job |
+|---|---------------------|---------|--------|-----|
+| 21 | TP=4 EP=2 DP=1 + recompute=full | — | OOM init | 3383867 |
+| 22 | **TP=1 EP=8 DP=1 + recompute=full** | **265** for 1 iter (53.6 % MFU) | iter 1 succeeds, iter 2 OOM at grouped_linear | 3383868 |
+
+To make Mixtral 8x7B fit on 2 nodes one would need to *also* drop the
+"stock default" constraint with `GIPFEL_EXP_AVG_DTYPE=fp8`,
+`GIPFEL_EXP_AVG_SQ_DTYPE=fp8`, and/or `GIPFEL_NO_MASTER_WEIGHTS=1` — each
+of which is an explicit memory-saving optimization, not part of the baseline.
+
+---
+
+## Final results table (all stable runs, sorted by MFU descending)
+
+| Rank | Config | MFU | TFLOP/s/GPU | Real model |
+|------|--------|------|-------------|------------|
+| 1 | Qwen 2.5-8B   1n TP=1 PP=1 DP=4 MBS=2 | **100.0 %** | 495.8 | ✓ |
+| 2 | 140B-synth    8n TP=4 PP=4 DP=2       |   90.1 % | 445.1 | ✗ synthetic |
+| 3 | Llama 3.1-70B 4n TP=4 PP=4 DP=1       |   89.9 % | 444.2 | ✓ |
+| 4 | Qwen 2.5-72B  4n TP=4 PP=4 DP=1       |   88.6 % | 437.7 | ✓ |
+| 5 | Qwen 2.5-32B  2n TP=4 PP=1 DP=2       |   82.0 % | 405.1 | ✓ |
+| 6 | Qwen 2.5-32B  4n TP=4 PP=1 DP=4       |   80.3 % | 396.5 | ✓ |
+| 7 | Qwen3-32B     2n TP=4 PP=1 DP=2       |   77.7 % | 383.9 | ✓ |
+| 8 | **Qwen3-14B   1n TP=4 PP=1 DP=1**     |   **68.7 %** | 339.2 | ✓ |
+| 9 | **Mixtral 8x7B 4n TP=4 PP=1 EP=2 DP=2** | **38.2 %** | 188.8 | ✓ |
+
+---
+
+## Recommended baselines
+
+Two candidates, picked to span different optimization stories:
+
+### Candidate A — **Mixtral 8x7B, 4 nodes, TP=4 PP=1 EP=2 DP=2, MBS=1, stock defaults**
+
+| Property | Value |
+|----------|-------|
+| Architecture | Mixture of Experts (8 experts, top-2, no shared expert) |
+| Total / active params | 47 B / 13 B |
 | Megatron support | Official `examples/mixtral/train_mixtral_8x7b_distributed.sh` |
-| Total params | 47 B (13 B active per token via top-2) |
-| Parallelism | TP=4 within node, PP=1, EP=2 across 2 of 4 DP ranks, DP=2 for dist-opt |
-| Stock baseline | **188.8 TFLOP/s/GPU = 38.2 % MFU** (job 3383851) |
-| Per-iter token throughput | ~2400 tok/s/GPU |
+| Stock baseline | **188.8 TFLOP/s/GPU = 38.2 % MFU** |
+| Job ID | 3383851 |
 
-**Why this baseline:**
+**Why pick A:** Lowest stock-default MFU in the entire sweep (38 %),
+the only configuration with that headroom and reasonable parallelism
+*and* a real model. Improvement axes are unusually rich because MoE
+introduces optimization knobs that don't exist for dense models:
 
-- The only configuration in the sweep where stock Megatron defaults give
-  MFU < 50 % with **fully reasonable parallelism**.
-- Real model (not synthetic), real Megatron MoE path (Megatron's own
-  `train_mixtral_8x7b_distributed.sh` flags), real EP wiring.
-- Headroom is rich AND varied:
-  - **MoE dispatcher tuning**: alltoall vs allgather, fused permute,
-    `--moe-permute-fusion`
-  - **MoE-grouped-GEMM kernel**: TE has alternative paths (GEMM vs grouped-GEMM)
-  - **FA3** (~+2-4 %)
-  - **MBS scaling** (with EP=2 DP=2 there's memory headroom that 2-node
-    didn't have)
-  - **FP8 expert GEMM** (TE 2.11 has FP8 grouped-GEMM)
-  - **TP/EP/DP rebalance** (e.g., TP=2 EP=4 DP=2 changes per-rank partition)
-  - **Token drop / capacity factor tuning**
-- Improvement story is varied across multiple optimization axes, not just
-  "stack FP8 on a dense model".
+- MoE-specific levers: token-dispatcher choice (alltoall vs allgather),
+  `--moe-permute-fusion`, grouped-GEMM kernel selection in TE, FP8
+  expert GEMM (TE 2.11 supports it), token-drop / capacity-factor tuning,
+  EP/DP rebalance.
+- Dense-style levers that still apply: FA3 attention backend, MBS
+  scaling (memory headroom is comfortable with EP=2 + DP=2 at 4 nodes),
+  FP8 attention and attention-projection GEMMs.
+- Improvement story spans multiple distinct axes — useful for the project
+  to demonstrate breadth, not just stack FP8 on a dense model.
 
 **Reproducible:**
 ```bash
@@ -154,50 +170,86 @@ GIPFEL_ACCOUNT=lp160 GIPFEL_PARTITION=normal \
   ./launch-mp.sh throughput mixtral-8x7b 20 4
 ```
 
-### Secondary candidates (in case Mixtral baseline doesn't fit project scope)
+### Candidate B — **Qwen3-14B, 1 node, TP=4 PP=1 DP=1, MBS=1, stock defaults**
 
-- **Qwen3-14B 1n TP=4 PP=1 DP=1** (68.7 % MFU): real Qwen3, parallelism
-  forced by memory, dense-only optimization path (FA3 / MBS / TP rebalance).
-- **Qwen 2.5-32B 2n TP=4 PP=1 DP=2** (82.0 %): the most-studied config
-  in this repo, ~+6 % headroom from FA3+MBS=2.
+| Property | Value |
+|----------|-------|
+| Architecture | Dense decoder-only (RoPE, SwiGLU, RMSNorm, GQA 5:1) |
+| Total params | 14 B |
+| Megatron support | Generic GPT path with CLI-flag spec |
+| Stock baseline | **339.2 TFLOP/s/GPU = 68.7 % MFU** |
+| Job ID | 3383834 |
 
-## Updated launch-mp.sh additions (this round)
+**Why pick B:** Single-node, the simplest possible infrastructure (no
+cross-node Slingshot for any collective). TP=4 is *forced* by memory
+(the alternative TP=1 PP=1 DP=4 OOMs); the resulting small per-shard
+GEMM tile is what suppresses MFU to 68.7 %. Improvement story:
 
-- New cases: `qwen3-14b`, `qwen3-32b`, `llama3-70b`, `qwen2.5-72b`,
+- Try TP=2 PP=1 DP=2 with `expandable_segments` — bigger GEMMs, expected
+  ~78-82 % MFU, demonstrates that "more TP isn't always better".
+- + MBS=2 if memory permits at TP=2 (more activation memory but bigger
+  GEMMs).
+- + FA3 (expected +2-4 %).
+- + FP8 compute as the final memory-permitting step.
+
+This baseline is a good fit if the project values infrastructure
+simplicity (no MoE complexity, single-node training) and a pure dense
+optimization narrative.
+
+**Reproducible:**
+```bash
+GIPFEL_ACCOUNT=lp160 GIPFEL_PARTITION=normal \
+  GIPFEL_WORKDIR=/users/$USER/gipfelsturm GIPFEL_TIME=00:30:00 \
+  ./launch-mp.sh throughput qwen3-14b 20 1
+```
+
+### Comparison table
+
+| Aspect | A: Mixtral 8x7B 4n | B: Qwen3-14B 1n |
+|--------|--------------------|-----------------|
+| Stock MFU | 38.2 % | 68.7 % |
+| Headroom | very large; multi-axis | moderate; mostly TP-rebalance + FA3/FP8 |
+| Model architecture | MoE | Dense |
+| Hardware budget | 4 nodes (16 GPUs) | 1 node (4 GPUs) |
+| Cross-node communication | EP all-to-all + DP grad-RS / param-AG | none |
+| Real published model | ✓ Mixtral (Mistral AI 2024) | ✓ Qwen3 (Alibaba 2025) |
+| Megatron-native MoE path | ✓ official `train_mixtral_8x7b_distributed.sh` | n/a (dense) |
+| Optimization narrative | rich, varied (MoE + dense) | linear, well-trodden |
+| Best for | demonstrating breadth of techniques | clean dense story, low resource cost |
+
+---
+
+## Why other candidates were rejected
+
+| Config | MFU | Reason rejected |
+|--------|------|-----------------|
+| Qwen 2.5-8B 1n | 100 % | Saturated — zero optimization headroom |
+| 140B-synth 8n | 90 % | Synthetic model, not a published architecture |
+| Llama 3.1-70B 4n | 90 % | High MFU; ≤ 5 % headroom on dense |
+| Qwen 2.5-72B 4n | 89 % | Same as Llama-70B class |
+| Qwen 2.5-32B 2n | 82 % | Already studied extensively in this repo; only ~+6 % from FA3+MBS=2 |
+| Qwen 2.5-32B 4n | 80 % | Slightly more headroom (FP8 fits) but still capped at ~+11 % |
+| Qwen3-32B 2n | 78 % | Same headroom as Qwen 2.5-32B but slightly less efficient attention; net no advantage |
+| Mixtral 8x22B 8n | OOM | Needs ≥ 16 nodes — out of practical scope |
+| Mixtral 8x7B 2n | OOM (any MP) | Won't fit at any legal MP with stock defaults |
+
+---
+
+## launch-mp.sh additions made during this work
+
+- New env var `GIPFEL_EP` (expert-model-parallel-size).
+- Per-model-tier `DEFAULT_EP`.
+- Per-model-tier `NUM_EXPERTS` and `MOE_TOPK` (default 0 for dense).
+- Validation: `NUM_EXPERTS % EP == 0`; `world == TP × PP × EP × DP`.
+- New `MOE_ARGS` array activated when `NUM_EXPERTS > 0`.
+- New model cases: `qwen3-14b`, `qwen3-32b`, `llama3-70b`, `qwen2.5-72b`,
   `mixtral-8x7b`, `mixtral-8x22b`.
-- New env var `GIPFEL_EP` + per-tier `DEFAULT_EP`.
-- New validation: `NUM_EXPERTS % EP == 0`, `world == TP×PP×EP×DP`.
-- New `MOE_ARGS` array (when NUM_EXPERTS > 0): `--num-experts`,
-  `--moe-router-topk`, `--moe-router-load-balancing-type aux_loss`,
-  `--moe-aux-loss-coeff 1e-2`, `--moe-grouped-gemm`,
-  `--moe-token-dispatcher-type alltoall`, `--expert-model-parallel-size $EP`.
 
 ## TODO
 
-- Verify Mixtral 8x7B 4n baseline reproducibility with 3 reruns (target ±1 %).
-- Quantify a single optimization step (e.g., FA3 alone) on this baseline to
-  publish an initial "+X %" number.
+- Lock one of the two candidates and verify with 3 reruns (target ±1 %
+  to establish the noise floor).
+- For Candidate A, evaluate one optimization step (e.g., FA3 or FP8
+  expert GEMM) to publish an initial "+X %" number against the baseline.
 - (Optional) Wire MoE shared-expert support into the launcher to enable
-  Qwen3-30B-A3B as an alternative MoE baseline (different routing topology).
-- (Optional) Mixtral 8x22B requires ≥16 nodes for stock defaults to fit; try
-  `GIPFEL_RECOMPUTE=full` + `GIPFEL_EXP_AVG_DTYPE=fp8` if 8 nodes is the
-  cap, but those are no longer "stock defaults".
-
-## Job IDs
-
-| ID | Run | Status |
-|----|-----|--------|
-| 3383408 | Qwen 2.5-8B 1n | ✓ |
-| 3383415 | 140B-synth 8n | ✓ |
-| 3383409 | Qwen 2.5-32B 2n | ✓ |
-| 3383410 | Qwen 2.5-32B 4n | ✓ |
-| 3383834 | Qwen3-14B 1n TP=4 | ✓ |
-| 3383835 | Qwen3-32B 2n | ✓ |
-| 3383837 | Qwen 2.5-72B 4n TP=4 PP=2 | OOM iter 1 |
-| 3383841 | Llama 3.1-70B 4n TP=4 PP=2 | OOM iter 14 |
-| 3383842 | Qwen3-14B 1n TP=1 DP=4 | OOM init |
-| 3383847 | Qwen 2.5-72B 4n TP=4 PP=4 | ✓ |
-| 3383848 | Llama 3.1-70B 4n TP=4 PP=4 | ✓ |
-| 3383849 | Mixtral 8x7B 2n EP=2 DP=1 | OOM init |
-| 3383850 | Mixtral 8x22B 8n EP=4 DP=2 | OOM init |
-| 3383851 | **Mixtral 8x7B 4n EP=2 DP=2** | **✓ recommended baseline** |
+  Qwen3-30B-A3B as a third MoE baseline alternative.
