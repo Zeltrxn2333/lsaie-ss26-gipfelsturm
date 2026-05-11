@@ -32,7 +32,7 @@ def _get_tilelang_fwd(batch: int, heads: int, seq_q: int, seq_kv: int,
     scale = (1.0 / (dim_qk ** 0.5)) * 1.44269504  # 1/log(2)
     type_str = "bfloat16" if dtype == torch.bfloat16 else "float16"
 
-    @tilelang.jit(out_idx=[3])
+    @tilelang.jit
     def main_kernel(
         Q: T.Tensor((batch, heads, seq_q, dim_qk), type_str),
         K: T.Tensor((batch, heads, seq_kv, dim_qk), type_str),
@@ -91,7 +91,8 @@ class _TileLangAttention(torch.autograd.Function):
         # q,k,v: [B, H, N, D] (GQA already expanded upstream)
         B, H, N, D = q.shape
         kernel = _get_tilelang_fwd(B, H, N, N, D, D, causal, q.dtype)
-        o = kernel(q, k, v)
+        o = torch.empty_like(q)
+        kernel(q, k, v, o)
         ctx.save_for_backward(q, k, v, o)
         ctx.sm_scale = sm_scale
         ctx.causal = causal
