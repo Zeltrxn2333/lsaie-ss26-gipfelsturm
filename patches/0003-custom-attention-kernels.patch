@@ -1,27 +1,34 @@
-# Adds a custom-kernel short-circuit to Megatron's DotProductAttention.forward.
+# Hooks GIPFEL custom attention kernels into both Megatron attention paths.
 #
 # WHAT:
-#   When the env var GIPFEL_ATTN_KERNEL is set to "triton" or "tilelang", the patched
-#   forward dispatches Q/K/V to a custom kernel from the `kernels/` package at the
-#   gipfelsturm repo root (added to PYTHONPATH by launch-mp.sh) and skips Megatron's
-#   built-in baddbmm / softmax / bmm sequence entirely.
+#   When env var GIPFEL_ATTN_KERNEL is "triton" or "tilelang", both
+#   DotProductAttention (used with --transformer-impl local) and
+#   TEDotProductAttention (used with --transformer-impl transformer_engine)
+#   short-circuit to a custom kernel via the gipfelsturm `kernels` package.
+#   This lets us A/B the Triton/TileLang attention against native TE
+#   attention (FA2/FA3/cuDNN) while keeping LayerNorm, sequence-parallel,
+#   fused softmax etc. constant.
 #
 # WHERE:
-#   Megatron-LM/megatron/core/transformer/dot_product_attention.py — DotProductAttention.forward.
-#   The patch inserts a new branch right after the initial asserts (currently after
-#   "assert attention_bias is None ..." around line 156) and before the legacy
-#   KV-repeat logic. If line numbers shift in a future Megatron rebase, look for
-#   `assert attention_bias is None` and insert the new branch immediately after the
-#   blank line that follows it.
+#   1. Megatron-LM/megatron/core/transformer/dot_product_attention.py
+#      DotProductAttention.forward — local path.
+#   2. Megatron-LM/megatron/core/extensions/transformer_engine.py
+#      TEDotProductAttention.forward — TE path. Patch inserts right after
+#      the """Forward.""" docstring line and before the packed_seq_params
+#      logic.
 #
 # WHY:
-#   Megatron's --attention-backend local enum value routes to this class. By
-#   intercepting forward, we get a clean injection point that doesn't require
-#   modifying TransformerEngine (precompiled, harder to patch). The `kernels/`
-#   package handles BSHD→BHSD conversion, GQA KV expansion, and dispatches to either
-#   the OpenAI Triton tutorial 06-fused-attention kernel (forward + backward) or
-#   TileLang's flash-attention example (forward only; backward falls back to PyTorch
-#   math SDPA — flagged in benchmarks).
+#   The TE-wrapper patch is the apples-to-apples comparison point: the rest
+#   of the model (LN, MLP, fused softmax) is identical to the FA2/FA3/cuDNN
+#   runs; only the attention kernel changes.
+#
+# HOW TO RELOCATE if line numbers shift:
+#   - For the DotProductAttention patch, find "assert attention_bias is None"
+#     in dot_product_attention.py and insert the new branch after it.
+#   - For the TEDotProductAttention patch, find the docstring `"""Forward."""`
+#     inside the forward() method of `class TEDotProductAttention(te.pytorch.DotProductAttention)`
+#     and insert the new branch immediately after.
+
 diff --git a/megatron/core/transformer/dot_product_attention.py b/megatron/core/transformer/dot_product_attention.py
 index 69039e0bf..d2d3e92d0 100644
 --- a/megatron/core/transformer/dot_product_attention.py
@@ -59,3 +66,36 @@ index 69039e0bf..d2d3e92d0 100644
          # ===================================
          # Raw attention scores. [b, n/p, s, s]
          # ===================================
+diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
+index ef8527e9e..2e6f0ea79 100644
+--- a/megatron/core/extensions/transformer_engine.py
++++ b/megatron/core/extensions/transformer_engine.py
+@@ -4,6 +4,7 @@ import dataclasses
+ import enum
+ import inspect
+ import io
++import math
+ import os
+ import pickle
+ import warnings
+@@ -1342,6 +1343,20 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
+         num_splits: Optional[int] = None,
+     ) -> torch.Tensor:
+         """Forward."""
++        # === GIPFEL custom kernel short-circuit ===
++        # When GIPFEL_ATTN_KERNEL is set, swap the TE attention kernel for our
++        # Triton/TileLang implementation while keeping the surrounding TE
++        # LayerNorm / sequence-parallel / fused softmax intact. This gives a
++        # clean attention-only A/B against the native TE backend.
++        _gipfel_kernel = os.environ.get("GIPFEL_ATTN_KERNEL", "").lower()
++        if _gipfel_kernel in ("triton", "tilelang"):
++            from kernels import run_attention as _gipfel_run_attention
++            _causal = (attn_mask_type == AttnMaskType.causal)
++            _scale = 1.0 / math.sqrt(query.size(-1))
++            _out = _gipfel_run_attention(query, key, value, _causal, _scale)
++            sq_, b_, np_, hn_ = _out.shape
++            return _out.reshape(sq_, b_, np_ * hn_)
++
+         if packed_seq_params is not None:
+             # If Dynamic CP group is provided, update TE DPA CP group
+             if packed_seq_params.cp_group is not None:
