@@ -545,7 +545,9 @@ elif [ "$GIPFEL_USE_FA3" = "1" ]; then
     echo "    --attention-backend flash" >> "$SCRIPT"
 fi
 
-if (( TP > 1 )); then
+if (( TP > 1 )) && [ -z "$GIPFEL_ATTN_KERNEL" ]; then
+    # sequence-parallel requires TE LayerNorm (not torch LayerNorm), so it's
+    # incompatible with --transformer-impl local used by GIPFEL_ATTN_KERNEL.
     echo "    --sequence-parallel" >> "$SCRIPT"
 fi
 if (( NUM_EXPERTS > 0 )); then
