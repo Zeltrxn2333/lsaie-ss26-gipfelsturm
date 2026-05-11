@@ -409,9 +409,15 @@ export OMP_NUM_THREADS=$((SLURM_CPUS_PER_TASK/SLURM_GPUS_PER_NODE))
 MASTER_ADDR=$(hostname)
 MASTER_PORT=25678
 
+if [ -n "$GIPFEL_ATTN_KERNEL" ]; then
+TRANSFORMER_ENGINE_ARGS=(
+    --transformer-impl local
+)
+else
 TRANSFORMER_ENGINE_ARGS=(
     --transformer-impl transformer_engine
 )
+fi
 
 SETUP
 
@@ -529,9 +535,9 @@ fi
 if [ -n "$GIPFEL_ATTN_KERNEL" ]; then
     # Custom Triton/TileLang kernel: route through Megatron's local DotProductAttention
     # which we patched (patches/0003-custom-attention-kernels.patch).
-    # `--attention-backend local` requires `--spec local`.
-    echo "    --attention-backend local" >> "$SCRIPT"
-    echo "    --spec local" >> "$SCRIPT"
+    # Use --transformer-impl local (no --attention-backend; default auto is harmless
+    # since TE isn't loaded when transformer-impl=local).
+    :  # handled by overriding TRANSFORMER_ENGINE_ARGS below
 elif [ -n "$GIPFEL_ATTN_BACKEND" ]; then
     echo "    --attention-backend $GIPFEL_ATTN_BACKEND" >> "$SCRIPT"
 elif [ "$GIPFEL_USE_FA3" = "1" ]; then
