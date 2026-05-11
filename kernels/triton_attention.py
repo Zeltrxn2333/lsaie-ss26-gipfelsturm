@@ -187,12 +187,12 @@ def _attn_bwd_dkdv(
             pT = tl.where(mask, pT, 0.0)
         do = tl.load(do_ptrs)
         ppT = pT
-        ppT = ppT.to(tl.float16)
+        ppT = ppT.to(tl.bfloat16)
         dv += tl.dot(ppT, do)
         Di = tl.load(D + offs_m)
         dpT = tl.dot(v, tl.trans(do)).to(tl.float32)
         dsT = pT * (dpT - Di[None, :])
-        dsT = dsT.to(tl.float16)
+        dsT = dsT.to(tl.bfloat16)
         dk += tl.dot(dsT, tl.trans(qT))
         curr_m += step_m
         qT_ptrs += step_m * stride_tok
@@ -228,7 +228,7 @@ def _attn_bwd_dq(
             p = tl.where(mask, p, 0.0)
         dp = tl.dot(do, vT).to(tl.float32)
         ds = p * (dp - Di[:, None])
-        ds = ds.to(tl.float16)
+        ds = ds.to(tl.bfloat16)
         dq += tl.dot(ds, tl.trans(kT))
         curr_n += step_n
         kT_ptrs += step_n * stride_tok
