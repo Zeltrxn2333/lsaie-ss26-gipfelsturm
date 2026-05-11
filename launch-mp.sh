@@ -71,6 +71,12 @@ GIPFEL_TP_COMM_OVERLAP=${GIPFEL_TP_COMM_OVERLAP:-0}
 GIPFEL_TIMING=${GIPFEL_TIMING:-0}
 # GIPFEL_USE_FA3=1 — prepend FA3 venv to PYTHONPATH so TE auto-uses flash-attn-3
 GIPFEL_USE_FA3=${GIPFEL_USE_FA3:-0}
+# GIPFEL_ATTN_BACKEND — explicit --attention-backend value (flash/fused/unfused/auto/local).
+#   If unset, FA3 toggle picks flash; otherwise auto.
+GIPFEL_ATTN_BACKEND=${GIPFEL_ATTN_BACKEND:-}
+# GIPFEL_CP — context-parallel-size. Default 1. Megatron shards seq dim across CP ranks.
+#   Requires world_size = TP × PP × CP × DP and num_heads divisible by (TP × CP).
+GIPFEL_CP=${GIPFEL_CP:-1}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
 # GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
@@ -141,6 +147,11 @@ case $MODEL_SIZE in
         NUM_LAYERS=32;  HIDDEN=4096;  FFN=14336;  HEADS=32; KV_HEADS=8
         MBS=2;  DEFAULT_NODES=4; DEFAULT_TP=1; DEFAULT_PP=1
         ;;
+    qwen3-8b)
+        # Real Qwen3-8B: 36 layers, h=4096, ffn=12288, 32 Q heads, 8 KV heads.
+        NUM_LAYERS=36; HIDDEN=4096; FFN=12288; HEADS=32; KV_HEADS=8
+        MBS=1; DEFAULT_NODES=1; DEFAULT_TP=4; DEFAULT_PP=1
+        ;;
     qwen3-14b)
         # Real Qwen3-14B: 40 layers, h=5120, ffn=17408, 40 Q heads, 8 KV heads.
         NUM_LAYERS=40; HIDDEN=5120; FFN=17408; HEADS=40; KV_HEADS=8
@@ -186,7 +197,7 @@ case $MODEL_SIZE in
         MBS=1; DEFAULT_NODES=8; DEFAULT_TP=4; DEFAULT_PP=1; DEFAULT_EP=4
         ;;
     *)
-        echo "Unknown model size: $MODEL_SIZE. Choose: 125m|350m|760m|1.5b|3b|8b|qwen3-14b|qwen3-32b|32b|llama3-70b|qwen2.5-72b|140b|mixtral-8x7b|mixtral-8x22b"
+        echo "Unknown model size: $MODEL_SIZE. Choose: 125m|350m|760m|1.5b|3b|8b|qwen3-8b|qwen3-14b|qwen3-32b|32b|llama3-70b|qwen2.5-72b|140b|mixtral-8x7b|mixtral-8x22b"
         exit 1
         ;;
 esac
@@ -195,6 +206,7 @@ NODES=${4:-$DEFAULT_NODES}
 TP=${GIPFEL_TP:-$DEFAULT_TP}
 PP=${GIPFEL_PP:-$DEFAULT_PP}
 EP=${GIPFEL_EP:-$DEFAULT_EP}
+CP=${GIPFEL_CP:-1}
 
 # Optional layer-count override (e.g. reduce 32B from 64->56 for single-node fit).
 if [ "$GIPFEL_NUM_LAYERS" != "0" ]; then
@@ -232,10 +244,36 @@ if (( NUM_EXPERTS > 0 )); then
         exit 1
     fi
 fi
+if (( CP > 1 )); then
+    if (( HEADS % (TP * CP) != 0 )); then
+        echo "ERROR: HEADS=$HEADS not divisible by TP*CP=$((TP*CP))" >&2
+        exit 1
+    fi
+    EFFECTIVE_EP=$(( NUM_EXPERTS > 0 ? EP : 1 ))
+    DP_AFTER_CP=$(( WORLD_SIZE / (TP * PP * EFFECTIVE_EP * CP) ))
+    if (( DP_AFTER_CP < 1 )) || (( WORLD_SIZE != TP * PP * EFFECTIVE_EP * CP * DP_AFTER_CP )); then
+        echo "ERROR: world=$WORLD_SIZE != TP($TP)*PP($PP)*EP($EFFECTIVE_EP)*CP($CP)*DP (must be exact)" >&2
+        exit 1
+    fi
+fi
 
 GBS=256
 SEQ_LEN=${GIPFEL_SEQ_LEN:-4096}
-JOB_NAME="gipfel-${MODE}-${MODEL_SIZE}-tp${TP}pp${PP}-${TRAINING_STEPS}s-${NODES}n"
+if (( CP > 1 )) && (( SEQ_LEN % (CP * 2) != 0 )); then
+    echo "ERROR: SEQ_LEN=$SEQ_LEN not divisible by CP*2=$((CP*2)) (Megatron CP requirement)" >&2
+    exit 1
+fi
+JOB_NAME="gipfel-${MODE}-${MODEL_SIZE}-tp${TP}pp${PP}"
+if (( CP > 1 )); then
+    JOB_NAME="${JOB_NAME}cp${CP}"
+fi
+if [ -n "$GIPFEL_ATTN_BACKEND" ]; then
+    JOB_NAME="${JOB_NAME}-${GIPFEL_ATTN_BACKEND}"
+    if [ "$GIPFEL_USE_FA3" = "1" ]; then
+        JOB_NAME="${JOB_NAME}fa3"
+    fi
+fi
+JOB_NAME="${JOB_NAME}-${TRAINING_STEPS}s-${NODES}n"
 
 ################ W&B block ################
 if [ "$WANDB" = true ]; then
@@ -452,7 +490,9 @@ fi
 if [ "$GIPFEL_TIMING" != "0" ]; then
     echo "    --timing-log-level $GIPFEL_TIMING" >> "$SCRIPT"
 fi
-if [ "$GIPFEL_USE_FA3" = "1" ]; then
+if [ -n "$GIPFEL_ATTN_BACKEND" ]; then
+    echo "    --attention-backend $GIPFEL_ATTN_BACKEND" >> "$SCRIPT"
+elif [ "$GIPFEL_USE_FA3" = "1" ]; then
     echo "    --attention-backend flash" >> "$SCRIPT"
 fi
 
@@ -461,6 +501,9 @@ if (( TP > 1 )); then
 fi
 if (( NUM_EXPERTS > 0 )); then
     echo "    --expert-model-parallel-size $EP" >> "$SCRIPT"
+fi
+if (( CP > 1 )); then
+    echo "    --context-parallel-size $CP" >> "$SCRIPT"
 fi
 # Note: P2P overlap in PP is ON by default in Megatron core_v0.16.1; only
 # --no-overlap-p2p-communication exists (store_false). No positive flag.
