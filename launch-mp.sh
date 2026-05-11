@@ -77,6 +77,15 @@ GIPFEL_ATTN_BACKEND=${GIPFEL_ATTN_BACKEND:-}
 # GIPFEL_CP — context-parallel-size. Default 1. Megatron shards seq dim across CP ranks.
 #   Requires world_size = TP × PP × CP × DP and num_heads divisible by (TP × CP).
 GIPFEL_CP=${GIPFEL_CP:-1}
+# GIPFEL_ZERO — ZeRO sharding stage via Megatron FSDP. Default 0 (ZeRO-1 via
+#   --use-distributed-optimizer, the current behavior).
+#     0 = --use-distributed-optimizer (MCore dist-opt; ZeRO-1 equivalent)
+#     1 = --use-megatron-fsdp --data-parallel-sharding-strategy optim
+#     2 = --use-megatron-fsdp --data-parallel-sharding-strategy optim_grads (ZeRO-2)
+#     3 = --use-megatron-fsdp --data-parallel-sharding-strategy optim_grads_params (ZeRO-3 / full FSDP)
+#   When non-zero, --use-distributed-optimizer / overlap flags are dropped
+#   (megatron-fsdp manages comm internally).
+GIPFEL_ZERO=${GIPFEL_ZERO:-0}
 # GIPFEL_MEM — SLURM --mem value (MB). Default 460000; Daint has ~480 GB per node.
 GIPFEL_MEM=${GIPFEL_MEM:-460000}
 # GIPFEL_CPU_OFFLOADING_LAYERS=N — TE activation offload for N layers (distinct
@@ -266,6 +275,9 @@ fi
 JOB_NAME="gipfel-${MODE}-${MODEL_SIZE}-tp${TP}pp${PP}"
 if (( CP > 1 )); then
     JOB_NAME="${JOB_NAME}cp${CP}"
+fi
+if [ "$GIPFEL_ZERO" != "0" ]; then
+    JOB_NAME="${JOB_NAME}-zero${GIPFEL_ZERO}"
 fi
 if [ -n "$GIPFEL_ATTN_BACKEND" ]; then
     JOB_NAME="${JOB_NAME}-${GIPFEL_ATTN_BACKEND}"
@@ -471,8 +483,19 @@ DISTRIBUTED_ARGS=(
     --pipeline-model-parallel-size ${PP}
 DISTRIBUTED
 
+# Megatron FSDP path. When ZeRO != 0, replace dist-opt + overlap flags with FSDP flags.
+if [ "$GIPFEL_ZERO" != "0" ]; then
+    case "$GIPFEL_ZERO" in
+        1) FSDP_STRATEGY=optim ;;
+        2) FSDP_STRATEGY=optim_grads ;;
+        3) FSDP_STRATEGY=optim_grads_params ;;
+        *) echo "ERROR: GIPFEL_ZERO must be 0/1/2/3 (got $GIPFEL_ZERO)" >&2; exit 1 ;;
+    esac
+    echo "    --use-megatron-fsdp" >> "$SCRIPT"
+    echo "    --data-parallel-sharding-strategy $FSDP_STRATEGY" >> "$SCRIPT"
+    echo "    --ckpt-format fsdp_dtensor" >> "$SCRIPT"
 # Muon asserts against --use-distributed-optimizer and overlap in core_v0.16.1.
-if [ "$GIPFEL_OPTIMIZER" != "muon" ] && [ "$GIPFEL_OPTIMIZER" != "dist_muon" ]; then
+elif [ "$GIPFEL_OPTIMIZER" != "muon" ] && [ "$GIPFEL_OPTIMIZER" != "dist_muon" ]; then
     echo "    --use-distributed-optimizer" >> "$SCRIPT"
     if [ "$GIPFEL_NO_OVERLAP_GR" != "1" ]; then
         echo "    --overlap-grad-reduce" >> "$SCRIPT"
