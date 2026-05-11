@@ -48,7 +48,7 @@ def plot_panel(rows, model, cp, out_dir: Path) -> None:
         if seq == 0:
             continue
         be = r["backend"]
-        tflops = float(r["mean_tflops"])
+        tflops = float(r["mean_tokens_per_gpu"])
         status = r["status"]
         by_seq_be[(seq, be)] = (tflops, status)
 
@@ -85,11 +85,12 @@ def plot_panel(rows, model, cp, out_dir: Path) -> None:
     ax.set_xticks(x)
     ax.set_xticklabels([str(s) for s in SEQ_LENS])
     ax.set_xlabel("Sequence length")
-    ax.set_ylabel("Throughput per GPU (TFLOP/s)")
+    ax.set_ylabel("Tokens per second per GPU")
     ax.set_title(f"End-to-end attention backend throughput: {model}, CP={cp}")
     ax.legend(loc="upper left")
     ax.grid(axis="y", alpha=0.3)
-    ax.set_ylim(0, max(550, max(h for h in [b[0] for b in by_seq_be.values()]) * 1.15))
+    max_h = max((h for h in [b[0] for b in by_seq_be.values()]), default=1.0)
+    ax.set_ylim(0, max_h * 1.18)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{model}_cp{cp}.png"
