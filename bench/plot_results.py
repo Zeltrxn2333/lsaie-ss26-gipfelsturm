@@ -34,13 +34,13 @@ BACKEND_COLORS = {
 SEQ_LENS = [512, 1024, 2048, 4096, 8192, 16384]
 
 
-def load(csv_path: Path) -> list[dict]:
+def load(csv_path: Path):
     with csv_path.open() as f:
         return list(csv.DictReader(f))
 
 
 def plot_panel(rows, model, cp, out_dir: Path) -> None:
-    by_seq_be: dict[tuple[int, str], tuple[float, str]] = {}
+    by_seq_be = {}
     for r in rows:
         if r["model"] != model or int(r["cp"]) != cp:
             continue
