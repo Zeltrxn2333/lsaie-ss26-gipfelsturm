@@ -412,6 +412,7 @@ MASTER_PORT=25678
 if [ -n "$GIPFEL_ATTN_KERNEL" ]; then
 TRANSFORMER_ENGINE_ARGS=(
     --transformer-impl local
+    --no-persist-layer-norm
 )
 else
 TRANSFORMER_ENGINE_ARGS=(
