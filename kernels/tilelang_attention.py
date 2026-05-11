@@ -45,6 +45,7 @@ def _get_tilelang_fwd(batch: int, heads: int, seq_q: int, seq_kv: int,
             V_shared = T.alloc_shared((BLOCK_N, dim_v), type_str)
             acc_o = T.alloc_fragment((BLOCK_M, dim_v), "float32")
             acc_s = T.alloc_fragment((BLOCK_M, BLOCK_N), "float32")
+            acc_s_cast = T.alloc_fragment((BLOCK_M, BLOCK_N), type_str)
             scores_max = T.alloc_fragment((BLOCK_M,), "float32")
             scores_max_prev = T.alloc_fragment((BLOCK_M,), "float32")
             scores_scale = T.alloc_fragment((BLOCK_M,), "float32")
@@ -73,7 +74,9 @@ def _get_tilelang_fwd(batch: int, heads: int, seq_q: int, seq_kv: int,
                     acc_o[i, j] *= scores_scale[i]
                 for i, j in T.Parallel(BLOCK_M, BLOCK_N):
                     acc_s[i, j] = T.exp2(acc_s[i, j] * scale - scores_max[i] * scale)
-                T.gemm(acc_s, V_shared, acc_o, policy=T.GemmWarpPolicy.FullRow)
+                for i, j in T.Parallel(BLOCK_M, BLOCK_N):
+                    acc_s_cast[i, j] = acc_s[i, j]
+                T.gemm(acc_s_cast, V_shared, acc_o, policy=T.GemmWarpPolicy.FullRow)
                 T.reduce_sum(acc_s, scores_sum, dim=1)
                 for i in T.Parallel(BLOCK_M):
                     logsum[i] = logsum[i] * scores_scale[i] + scores_sum[i]
