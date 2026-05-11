@@ -365,6 +365,12 @@ export PYTHONPATH=/iopsstor/scratch/cscs/\$USER/venvs/fa3:\$PYTHONPATH
 FA3_EOF
 fi
 
+if [ "$GIPFEL_ATTN_KERNEL" = "tilelang" ]; then
+    cat >> "$SCRIPT" << TILELANG_EOF
+export PYTHONPATH=/iopsstor/scratch/cscs/\$USER/venvs/tilelang:\$PYTHONPATH
+TILELANG_EOF
+fi
+
 # Megatron FSDP requires CUDA_DEVICE_MAX_CONNECTIONS > 1.
 if [ "$GIPFEL_ZERO" != "0" ]; then
     echo "export CUDA_DEVICE_MAX_CONNECTIONS=32" >> "$SCRIPT"
