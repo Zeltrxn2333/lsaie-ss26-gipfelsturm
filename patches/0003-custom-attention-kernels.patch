@@ -1,0 +1,61 @@
+# Adds a custom-kernel short-circuit to Megatron's DotProductAttention.forward.
+#
+# WHAT:
+#   When the env var GIPFEL_ATTN_KERNEL is set to "triton" or "tilelang", the patched
+#   forward dispatches Q/K/V to a custom kernel from the `kernels/` package at the
+#   gipfelsturm repo root (added to PYTHONPATH by launch-mp.sh) and skips Megatron's
+#   built-in baddbmm / softmax / bmm sequence entirely.
+#
+# WHERE:
+#   Megatron-LM/megatron/core/transformer/dot_product_attention.py — DotProductAttention.forward.
+#   The patch inserts a new branch right after the initial asserts (currently after
+#   "assert attention_bias is None ..." around line 156) and before the legacy
+#   KV-repeat logic. If line numbers shift in a future Megatron rebase, look for
+#   `assert attention_bias is None` and insert the new branch immediately after the
+#   blank line that follows it.
+#
+# WHY:
+#   Megatron's --attention-backend local enum value routes to this class. By
+#   intercepting forward, we get a clean injection point that doesn't require
+#   modifying TransformerEngine (precompiled, harder to patch). The `kernels/`
+#   package handles BSHD→BHSD conversion, GQA KV expansion, and dispatches to either
+#   the OpenAI Triton tutorial 06-fused-attention kernel (forward + backward) or
+#   TileLang's flash-attention example (forward only; backward falls back to PyTorch
+#   math SDPA — flagged in benchmarks).
+diff --git a/megatron/core/transformer/dot_product_attention.py b/megatron/core/transformer/dot_product_attention.py
+index 69039e0bf..d2d3e92d0 100644
+--- a/megatron/core/transformer/dot_product_attention.py
++++ b/megatron/core/transformer/dot_product_attention.py
+@@ -2,6 +2,7 @@
+
+
+ import math
++import os
+ from typing import Optional, Tuple
+
+ import torch
+@@ -156,6 +157,24 @@ class DotProductAttention(MegatronModule):
+         )
+         assert attention_bias is None, "Attention bias is not supported for DotProductAttention."
+
++        # === GIPFEL custom kernel short-circuit ===
++        # When GIPFEL_ATTN_KERNEL is set, dispatch Q/K/V to a custom Triton or TileLang
++        # kernel via the gipfelsturm `kernels` package and return early. The kernel
++        # handles its own causal mask (taken from attn_mask_type) and GQA expansion.
++        _gipfel_kernel = os.environ.get("GIPFEL_ATTN_KERNEL", "").lower()
++        if _gipfel_kernel in ("triton", "tilelang"):
++            try:
++                from kernels import run_attention as _gipfel_run_attention
++            except ImportError as e:
++                raise RuntimeError(
++                    "GIPFEL_ATTN_KERNEL set but `kernels` package not importable; "
++                    "ensure $WORKDIR is on PYTHONPATH (launch-mp.sh should handle this)."
++                ) from e
++            _causal = (attn_mask_type == AttnMaskType.causal) if attn_mask_type is not None else True
++            _out = _gipfel_run_attention(query, key, value, _causal, self.softmax_scale)
++            sq_, b_, np_, hn_ = _out.shape
++            return _out.reshape(sq_, b_, np_ * hn_)
++
+         # ===================================
+         # Raw attention scores. [b, n/p, s, s]
+         # ===================================

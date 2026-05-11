@@ -77,6 +77,11 @@ GIPFEL_ATTN_BACKEND=${GIPFEL_ATTN_BACKEND:-}
 # GIPFEL_CP — context-parallel-size. Default 1. Megatron shards seq dim across CP ranks.
 #   Requires world_size = TP × PP × CP × DP and num_heads divisible by (TP × CP).
 GIPFEL_CP=${GIPFEL_CP:-1}
+# GIPFEL_ATTN_KERNEL — custom attention kernel. When set, forces
+#   --attention-backend local and exports the var into the job env so the
+#   patched DotProductAttention.forward dispatches to kernels/ package.
+#   Values: triton, tilelang. Default empty (no override).
+GIPFEL_ATTN_KERNEL=${GIPFEL_ATTN_KERNEL:-}
 # GIPFEL_ZERO — ZeRO sharding stage via Megatron FSDP. Default 0 (ZeRO-1 via
 #   --use-distributed-optimizer, the current behavior).
 #     0 = --use-distributed-optimizer (MCore dist-opt; ZeRO-1 equivalent)
@@ -279,7 +284,9 @@ fi
 if [ "$GIPFEL_ZERO" != "0" ]; then
     JOB_NAME="${JOB_NAME}-zero${GIPFEL_ZERO}"
 fi
-if [ -n "$GIPFEL_ATTN_BACKEND" ]; then
+if [ -n "$GIPFEL_ATTN_KERNEL" ]; then
+    JOB_NAME="${JOB_NAME}-${GIPFEL_ATTN_KERNEL}"
+elif [ -n "$GIPFEL_ATTN_BACKEND" ]; then
     JOB_NAME="${JOB_NAME}-${GIPFEL_ATTN_BACKEND}"
     if [ "$GIPFEL_USE_FA3" = "1" ]; then
         JOB_NAME="${JOB_NAME}fa3"
@@ -391,7 +398,7 @@ mkdir -p logs $LOG_DIR $TENSORBOARD_DIR $DATASET_CACHE_DIR
 
 cd $MEGATRON_LM_DIR
 flock $MEGATRON_LM_DIR/.git-lock bash -c "cd $MEGATRON_LM_DIR && git checkout -- . && git apply $WORKDIR/patches/*.patch"
-export PYTHONPATH=$MEGATRON_LM_DIR:$PYTHONPATH
+export PYTHONPATH=$WORKDIR:$MEGATRON_LM_DIR:$PYTHONPATH
 export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}
 export TORCH_NCCL_AVOID_RECORD_STREAMS=1
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
@@ -402,9 +409,15 @@ export OMP_NUM_THREADS=$((SLURM_CPUS_PER_TASK/SLURM_GPUS_PER_NODE))
 MASTER_ADDR=$(hostname)
 MASTER_PORT=25678
 
+if [ -n "$GIPFEL_ATTN_KERNEL" ]; then
+TRANSFORMER_ENGINE_ARGS=(
+    --transformer-impl local
+)
+else
 TRANSFORMER_ENGINE_ARGS=(
     --transformer-impl transformer_engine
 )
+fi
 
 SETUP
 
@@ -519,7 +532,12 @@ fi
 if [ "$GIPFEL_TIMING" != "0" ]; then
     echo "    --timing-log-level $GIPFEL_TIMING" >> "$SCRIPT"
 fi
-if [ -n "$GIPFEL_ATTN_BACKEND" ]; then
+if [ -n "$GIPFEL_ATTN_KERNEL" ]; then
+    # Custom Triton/TileLang kernel: route through Megatron's local DotProductAttention
+    # which we patched (patches/0003-custom-attention-kernels.patch).
+    echo "    --attention-backend local" >> "$SCRIPT"
+    echo "    --transformer-impl local" >> "$SCRIPT"
+elif [ -n "$GIPFEL_ATTN_BACKEND" ]; then
     echo "    --attention-backend $GIPFEL_ATTN_BACKEND" >> "$SCRIPT"
 elif [ "$GIPFEL_USE_FA3" = "1" ]; then
     echo "    --attention-backend flash" >> "$SCRIPT"
