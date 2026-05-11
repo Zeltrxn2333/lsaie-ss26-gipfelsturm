@@ -567,7 +567,8 @@ fi
 #   plus libs — may exceed the --mem=460000 cgroup budget. Verify before using.
 # Opt-in via GIPFEL_FP8=1: add --fp8-format hybrid + --fp8-param-gather (halves param storage).
 # Opt-in via GIPFEL_RECOMPUTE={1,full}: --recompute-activations or full recompute.
-if [ "$GIPFEL_OPTIMIZER" = "adam" ]; then
+if [ "$GIPFEL_OPTIMIZER" = "adam" ] && [ "$GIPFEL_ZERO" = "0" ]; then
+    # exp-avg-dtype != fp32 is only valid alongside --use-precision-aware-optimizer.
     MEMORY_LINES="    --exp-avg-dtype $GIPFEL_EXP_AVG_DTYPE"$'\n'"    --exp-avg-sq-dtype $GIPFEL_EXP_AVG_SQ_DTYPE"
     if [ "$GIPFEL_MAIN_PARAMS_FP16" = "1" ]; then
         MEMORY_LINES+=$'\n'"    --main-params-dtype fp16"
