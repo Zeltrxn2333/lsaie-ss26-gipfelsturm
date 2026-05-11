@@ -18,18 +18,22 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-BACKEND_ORDER = ["unfused", "flash", "fused", "flash+fa3"]
+BACKEND_ORDER = ["unfused", "flash", "triton", "fused", "flash+fa3", "tilelang"]
 BACKEND_LABELS = {
     "unfused": "Standard (math SDPA)",
     "flash": "FA2",
+    "triton": "Triton (OpenAI tutorial)",
     "fused": "cuDNN FusedAttention",
     "flash+fa3": "FA3",
+    "tilelang": "TileLang",
 }
 BACKEND_COLORS = {
     "unfused": "#1f77b4",
     "flash": "#ff7f0e",
+    "triton": "#2ca02c",
     "fused": "#d62728",
     "flash+fa3": "#9467bd",
+    "tilelang": "#8c564b",
 }
 SEQ_LENS = [512, 1024, 2048, 4096, 8192, 16384]
 

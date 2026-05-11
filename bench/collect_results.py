@@ -24,7 +24,7 @@ NAME_RE = re.compile(
     r"(?P<model>qwen3-8b|qwen3-14b|qwen3-32b|qwen2\.5-72b|llama3-70b|"
     r"mixtral-8x7b|mixtral-8x22b|32b|8b|140b)"
     r"-tp(?P<tp>\d+)pp(?P<pp>\d+)(?:cp(?P<cp>\d+))?"
-    r"(?:-(?P<backend>unfused|flash|fused|auto|local)(?P<fa3>fa3)?)?"
+    r"(?:-(?P<backend>unfused|flash|fused|auto|local|triton|tilelang)(?P<fa3>fa3)?)?"
     r"-(?P<steps>\d+)s-(?P<nodes>\d+)n-(?P<jid>\d+)\.log"
 )
 
