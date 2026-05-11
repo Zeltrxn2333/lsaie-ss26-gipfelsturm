@@ -408,8 +408,9 @@ TRANSFORMER_ENGINE_ARGS=(
 
 SETUP
 
-# Precision-aware-optimizer only works with adam in core_v0.16.1.
-if [ "$GIPFEL_OPTIMIZER" = "adam" ]; then
+# Precision-aware-optimizer only works with adam + distributed optimizer in core_v0.16.1.
+# Megatron FSDP (GIPFEL_ZERO != 0) is incompatible.
+if [ "$GIPFEL_OPTIMIZER" = "adam" ] && [ "$GIPFEL_ZERO" = "0" ]; then
     cat >> "$SCRIPT" << 'PAO'
 TRANSFORMER_ENGINE_ARGS+=(
     --use-precision-aware-optimizer
