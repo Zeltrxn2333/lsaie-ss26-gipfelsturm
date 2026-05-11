@@ -358,6 +358,11 @@ export PYTHONPATH=/iopsstor/scratch/cscs/\$USER/venvs/fa3:\$PYTHONPATH
 FA3_EOF
 fi
 
+# Megatron FSDP requires CUDA_DEVICE_MAX_CONNECTIONS > 1.
+if [ "$GIPFEL_ZERO" != "0" ]; then
+    echo "export CUDA_DEVICE_MAX_CONNECTIONS=32" >> "$SCRIPT"
+fi
+
 cat >> "$SCRIPT" << 'BODY'
 MEGATRON_LM_DIR=$WORKDIR/Megatron-LM
 DATASET_CACHE_DIR=/iopsstor/scratch/cscs/$USER/gipfelsturm/cache
@@ -387,7 +392,7 @@ mkdir -p logs $LOG_DIR $TENSORBOARD_DIR $DATASET_CACHE_DIR
 cd $MEGATRON_LM_DIR
 flock $MEGATRON_LM_DIR/.git-lock bash -c "cd $MEGATRON_LM_DIR && git checkout -- . && git apply $WORKDIR/patches/*.patch"
 export PYTHONPATH=$MEGATRON_LM_DIR:$PYTHONPATH
-export CUDA_DEVICE_MAX_CONNECTIONS=1
+export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}
 export TORCH_NCCL_AVOID_RECORD_STREAMS=1
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
