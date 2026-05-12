@@ -59,7 +59,7 @@ def plot_panel(rows, model, cp, out_dir: Path) -> None:
     if not by_seq_be:
         return
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(18, 6))
     x = np.arange(len(SEQ_LENS))
     width = 0.20
 
@@ -111,11 +111,8 @@ def main() -> int:
     out_dir = Path(sys.argv[2])
     rows = load(csv_path)
 
-    models = sorted({r["model"] for r in rows})
-    cps = sorted({int(r["cp"]) for r in rows})
-    for model in models:
-        for cp in cps:
-            plot_panel(rows, model, cp, out_dir)
+    # Only the qwen3-14b CP=1 panel is the deliverable; skip everything else.
+    plot_panel(rows, "qwen3-14b", 1, out_dir)
     return 0
 
 
