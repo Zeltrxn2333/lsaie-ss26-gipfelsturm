@@ -42,15 +42,25 @@ def run_cublas_fp8(state) -> torch.Tensor:
 
 
 def prep_deepgemm_fp8(a_bf16: torch.Tensor, b_bf16: torch.Tensor, dg):
-    """Prepare per-token scales for A and per-128x128-block scales for B (DeepGEMM NT layout)."""
+    """Prepare per-token×per-K-block scales for A and per-128x128-block scales for B."""
     M, K = a_bf16.shape
     _, N = b_bf16.shape
     device = a_bf16.device
-    # Per-token amax for A
-    a_amax = a_bf16.abs().amax(dim=1).to(torch.float32).clamp(min=1e-4)
-    scale_a = 448.0 / a_amax  # [M]
-    a_fp8 = (a_bf16 * scale_a[:, None]).to(torch.float8_e4m3fn)
-    inv_a = (1.0 / scale_a).contiguous()  # [M]
+    # A scales: per-token, per-128-K-block → shape [M, ceil(K/BLOCK)]
+    pad_K_a = (-K) % BLOCK
+    if pad_K_a:
+        a_padded = torch.nn.functional.pad(a_bf16, (0, pad_K_a))
+    else:
+        a_padded = a_bf16
+    Kp = a_padded.shape[1]
+    Kb = Kp // BLOCK
+    a_blocks = a_padded.view(M, Kb, BLOCK)
+    a_block_amax = a_blocks.abs().amax(dim=2).to(torch.float32).clamp(min=1e-4)  # [M, Kb]
+    scale_a = 448.0 / a_block_amax  # [M, Kb]
+    scale_a_full = scale_a[:, :, None].expand(M, Kb, BLOCK).reshape(M, Kp)
+    a_fp8_padded = (a_padded * scale_a_full).to(torch.float8_e4m3fn)
+    a_fp8 = a_fp8_padded[:, :K].contiguous()
+    inv_a = (1.0 / scale_a).contiguous()  # [M, Kb]
 
     # B in [N, K] layout (NT = "B already transposed compared to A@B")
     b_nt = b_bf16.t().contiguous()  # [N, K]
