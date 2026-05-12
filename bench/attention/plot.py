@@ -2,13 +2,10 @@
 """Plot grouped-bar attention backend chart from the deliverable CSV.
 
 Usage:
-    python3 bench/plot_results.py bench/results/qwen3-14b_deliverable.csv bench/results/
+    python3 bench/attention/plot.py bench/attention/data.csv bench/attention/
 
 Produces:
-    qwen3-14b_cp1.png
-
-The deliverable CSV holds 36 rows = 6 backends × 6 seq_lens, deduped from the
-raw sweep.csv (which contains every parsed log, including historic non-sweep runs).
+    chart.png (overwrites)
 """
 import csv
 import sys
@@ -100,7 +97,7 @@ def plot_panel(rows, model, cp, out_dir: Path) -> None:
     ax.set_ylim(0, max_h * 1.18)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{model}_cp{cp}.png"
+    out_path = out_dir / "chart.png"
     fig.savefig(out_path, dpi=120, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {out_path}")

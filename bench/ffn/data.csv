@@ -1,0 +1,9 @@
+mbs,precision,swiglu_kernel,tflops_per_gpu,tokens_per_sec_per_gpu
+1,bf16,megatron,339,3943
+1,bf16,liger,342,3985
+1,fp8,megatron,325,3781
+1,fp8,liger,322,3757
+2,bf16,megatron,395,4598
+2,bf16,liger,391,4560
+2,fp8,megatron,534,6225
+2,fp8,liger,518,6038
