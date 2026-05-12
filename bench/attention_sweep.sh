@@ -23,6 +23,19 @@
 #   bash bench/attention_sweep.sh                          # submit all 36 jobs
 #   bash bench/attention_sweep.sh --dry-run                # list the 36 jobs
 #   bash bench/attention_sweep.sh --only triton            # submit just the 6 Triton jobs
+#
+# Configurable via env vars (defaults preserve the deliverable's exact config):
+#   GIPFEL_ACCOUNT     SLURM account            (default: lp160)
+#   GIPFEL_PARTITION   SLURM partition          (default: normal)
+#   GIPFEL_WORKDIR     gipfelsturm checkout dir (default: /users/$USER/gipfelsturm)
+#   GIPFEL_TIME        SLURM time limit         (default: 00:25:00)
+#   MODEL              launch-mp.sh model size  (default: qwen3-14b)
+#   NODES              # of nodes               (default: 1)
+#   ITERS              training iters per job   (default: 15)
+#
+# Example: bigger model, different account
+#   GIPFEL_ACCOUNT=infra01 GIPFEL_PARTITION=normal MODEL=qwen3-32b NODES=2 \
+#       bash bench/attention_sweep.sh
 
 set -euo pipefail
 
@@ -54,10 +67,17 @@ unset GIPFEL_FP8 GIPFEL_NO_MASTER_WEIGHTS GIPFEL_RECOMPUTE \
       GIPFEL_MBS GIPFEL_NUM_LAYERS GIPFEL_EP GIPFEL_CP \
       GIPFEL_GPUS_PER_NODE GIPFEL_ZERO GIPFEL_TP GIPFEL_PP
 
-export GIPFEL_ACCOUNT=lp160
-export GIPFEL_PARTITION=normal
-export GIPFEL_WORKDIR=/users/$USER/gipfelsturm
-export GIPFEL_TIME=00:25:00
+# Cluster / SLURM parameters — override via env var, defaults preserve Daint lp160 behavior.
+export GIPFEL_ACCOUNT=${GIPFEL_ACCOUNT:-lp160}
+export GIPFEL_PARTITION=${GIPFEL_PARTITION:-normal}
+export GIPFEL_WORKDIR=${GIPFEL_WORKDIR:-/users/$USER/gipfelsturm}
+export GIPFEL_TIME=${GIPFEL_TIME:-00:25:00}
+
+# Model / parallelism — override via env var. Defaults match the deliverable
+# config: Qwen3-14B 1 node × 4 GPU, TP=4 PP=1 DP=1, MBS=1, 15 iters.
+MODEL=${MODEL:-qwen3-14b}
+NODES=${NODES:-1}
+ITERS=${ITERS:-15}
 
 total=0
 for seq in "${SEQ_LENS[@]}"; do
@@ -81,7 +101,7 @@ for seq in "${SEQ_LENS[@]}"; do
             echo "[$total] WOULD SUBMIT: $tag"
         else
             echo "[$total] submit: $tag"
-            ./launch-mp.sh throughput qwen3-14b 15 1 2>&1 | tail -1
+            ./launch-mp.sh throughput "$MODEL" "$ITERS" "$NODES" 2>&1 | tail -1
         fi
     done
 done
