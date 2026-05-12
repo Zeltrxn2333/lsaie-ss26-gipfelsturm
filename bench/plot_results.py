@@ -61,7 +61,7 @@ def plot_panel(rows, model, cp, out_dir: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(18, 6))
     x = np.arange(len(SEQ_LENS))
-    width = 0.20
+    width = 0.13
 
     for i, backend in enumerate(BACKEND_ORDER):
         heights = []
