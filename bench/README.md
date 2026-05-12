@@ -3,15 +3,6 @@
 End-to-end throughput comparison of 6 attention kernels on Qwen3-14B across
 sequence lengths 512 → 16384 on CSCS Daint GH200.
 
-## What's in this folder
-
-| File | Purpose |
-|------|---------|
-| `attention_sweep.sh`   | Submits the full 36-job matrix (6 backends × 6 seq_lens) |
-| `collect_results.py`   | Parses Megatron logs in `logs/` → `results/sweep.csv` |
-| `plot_results.py`      | Generates the grouped bar chart `results/qwen3-14b_cp1.png` |
-| `results/sweep.csv`    | Mean throughput per `(model, backend, seq_len)` |
-| `results/qwen3-14b_cp1.png` | Final comparison chart |
 
 ## Backends compared
 
@@ -90,9 +81,15 @@ bash bench/attention_sweep.sh --only triton
 After all jobs finish (monitor with `squeue -u $USER`):
 
 ```bash
+# 1. Parse every log into the raw CSV
 python3 bench/collect_results.py > bench/results/sweep.csv
-scp -r cscs-daint:/users/$USER/gipfelsturm/bench/results /scratch/<local>/   # optional
-python3 bench/plot_results.py bench/results/sweep.csv bench/results/
+
+# 2. Filter to the 36-row deliverable for this Qwen3-14B comparison
+python3 bench/filter_deliverable.py bench/results/sweep.csv \
+    > bench/results/qwen3-14b_deliverable.csv
+
+# 3. Plot (matplotlib needed; if not on Daint, scp the CSV and plot locally)
+python3 bench/plot_results.py bench/results/qwen3-14b_deliverable.csv bench/results/
 ```
 
 The plotter needs `matplotlib`; on Daint login nodes it's not installed by

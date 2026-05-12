@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Plot grouped-bar attention backend chart from sweep CSV.
+"""Plot grouped-bar attention backend chart from the deliverable CSV.
 
 Usage:
-    python3 bench/plot_results.py bench/results/sweep.csv bench/results/
+    python3 bench/plot_results.py bench/results/qwen3-14b_deliverable.csv bench/results/
 
-Produces one PNG per (model, cp):
-    <model>_cp<cp>.png
+Produces:
+    qwen3-14b_cp1.png
+
+The deliverable CSV holds 36 rows = 6 backends × 6 seq_lens, deduped from the
+raw sweep.csv (which contains every parsed log, including historic non-sweep runs).
 """
 import csv
 import sys
