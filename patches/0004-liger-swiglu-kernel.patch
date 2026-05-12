@@ -1,0 +1,58 @@
+# Adds GIPFEL_SWIGLU_KERNEL=liger short-circuit to Megatron's MLP.forward.
+#
+# WHAT:
+#   When GIPFEL_SWIGLU_KERNEL=liger, replace Megatron's bias_swiglu_impl
+#   element-wise kernel with Liger Kernel's LigerSiLUMulFunction (Triton).
+#   The FC1 and FC2 cuBLAS GEMMs are unchanged — only the SiLU(gate) * up
+#   activation kernel swaps.
+#
+# WHERE:
+#   Megatron-LM/megatron/core/transformer/mlp.py — MLP.forward, right after
+#   `nvtx_range_push(suffix="activation")` (currently line 162) and before
+#   `if self.config.use_te_activation_func:`. The new branch fires only when
+#   activation_func is F.silu AND gated_linear_unit is True (matches Megatron's
+#   own SwiGLU path detection).
+#
+# WHY:
+#   Triton-implemented activation kernel can be marginally faster than
+#   Megatron's CUDA bias_swiglu_impl at certain shapes. Activation is only
+#   2-5% of MLP time, so the upper bound on improvement is small, but this is
+#   the cleanest way to A/B Liger's claim vs Megatron's native implementation.
+#
+# HOW TO RELOCATE if line numbers shift:
+#   Find `nvtx_range_push(suffix="activation")` in MLP.forward and insert the
+#   new `_gipfel_swiglu = os.environ.get(...)` branch immediately after.
+diff --git a/megatron/core/transformer/mlp.py b/megatron/core/transformer/mlp.py
+index ad80bcfe4..9f2dcbbca 100644
+--- a/megatron/core/transformer/mlp.py
++++ b/megatron/core/transformer/mlp.py
+@@ -2,6 +2,7 @@
+
+ import gc
+ import logging
++import os
+ import warnings
+ from dataclasses import dataclass
+ from typing import Optional, Union
+@@ -160,7 +161,20 @@ class MLP(MegatronModule):
+         nvtx_range_pop(suffix="linear_fc1")
+
+         nvtx_range_push(suffix="activation")
+-        if self.config.use_te_activation_func:
++        # === GIPFEL Liger SwiGLU short-circuit ===
++        # When GIPFEL_SWIGLU_KERNEL=liger and the model is configured with SwiGLU
++        # (silu + gated_linear_unit), replace Megatron's bias_swiglu_impl with
++        # LigerSiLUMulFunction. Keeps the surrounding FC1/FC2 cuBLAS GEMMs intact.
++        _gipfel_swiglu = os.environ.get("GIPFEL_SWIGLU_KERNEL", "").lower()
++        if (_gipfel_swiglu == "liger"
++                and self.activation_func == F.silu
++                and self.config.gated_linear_unit):
++            if bias_parallel is not None:
++                intermediate_parallel = intermediate_parallel + bias_parallel
++            from liger_kernel.ops.swiglu import LigerSiLUMulFunction as _LigerSwiGLU
++            _gate, _up = intermediate_parallel.chunk(2, dim=-1)
++            intermediate_parallel = _LigerSwiGLU.apply(_gate, _up)
++        elif self.config.use_te_activation_func:
+             if bias_parallel is not None:
+                 intermediate_parallel = intermediate_parallel + bias_parallel
+             intermediate_parallel = self.activation_func(intermediate_parallel)

@@ -82,6 +82,10 @@ GIPFEL_CP=${GIPFEL_CP:-1}
 #   patched DotProductAttention.forward dispatches to kernels/ package.
 #   Values: triton, tilelang. Default empty (no override).
 GIPFEL_ATTN_KERNEL=${GIPFEL_ATTN_KERNEL:-}
+# GIPFEL_SWIGLU_KERNEL — custom SwiGLU activation kernel. When set to "liger",
+#   patches/0004 replaces Megatron's bias_swiglu_impl with LigerSiLUMulFunction.
+#   FC1/FC2 GEMMs are unchanged.
+GIPFEL_SWIGLU_KERNEL=${GIPFEL_SWIGLU_KERNEL:-}
 # GIPFEL_ZERO — ZeRO sharding stage via Megatron FSDP. Default 0 (ZeRO-1 via
 #   --use-distributed-optimizer, the current behavior).
 #     0 = --use-distributed-optimizer (MCore dist-opt; ZeRO-1 equivalent)
@@ -284,6 +288,9 @@ fi
 if [ "$GIPFEL_ZERO" != "0" ]; then
     JOB_NAME="${JOB_NAME}-zero${GIPFEL_ZERO}"
 fi
+if [ -n "$GIPFEL_SWIGLU_KERNEL" ]; then
+    JOB_NAME="${JOB_NAME}-swiglu${GIPFEL_SWIGLU_KERNEL}"
+fi
 if [ -n "$GIPFEL_ATTN_KERNEL" ]; then
     JOB_NAME="${JOB_NAME}-${GIPFEL_ATTN_KERNEL}"
 elif [ -n "$GIPFEL_ATTN_BACKEND" ]; then
@@ -369,6 +376,12 @@ if [ "$GIPFEL_ATTN_KERNEL" = "tilelang" ]; then
     cat >> "$SCRIPT" << TILELANG_EOF
 export PYTHONPATH=/iopsstor/scratch/cscs/\$USER/venvs/tilelang:\$PYTHONPATH
 TILELANG_EOF
+fi
+
+if [ "$GIPFEL_SWIGLU_KERNEL" = "liger" ]; then
+    cat >> "$SCRIPT" << LIGER_EOF
+export PYTHONPATH=/iopsstor/scratch/cscs/\$USER/venvs/liger:\$PYTHONPATH
+LIGER_EOF
 fi
 
 # Megatron FSDP requires CUDA_DEVICE_MAX_CONNECTIONS > 1.
